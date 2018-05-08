@@ -17,23 +17,24 @@
 package main
 
 import (
+	"bufio"
+	"fmt"
 	"github.com/pkg/errors"
 	"gopkg.in/alecthomas/kingpin.v2"
-	"os"
-	"fmt"
-	"bufio"
 	"net/http"
+	"os"
 
+	"bytes"
+	"crypto/tls"
 	"github.com/miekg/dns"
+	"golang.org/x/crypto/ssh/terminal"
+	"io"
+	"math/rand"
 	"net"
 	"strconv"
-	"time"
-	"crypto/tls"
 	"strings"
-	"io"
-	"bytes"
 	"sync"
-	"math/rand"
+	"time"
 )
 
 var (
@@ -150,28 +151,98 @@ func main() {
 }
 
 func displayIssues(issues issues) {
-	fmt.Printf("\nVulnerabilities\n\n")
+	var reqIssues, DNSIssues, potVulns bool
+
+	fmt.Printf("\nRequest issues\n")
+	fmt.Printf("--------------\n")
+	for _, issue := range issues {
+		if issue.kind == "request" {
+			reqIssues = true
+			fmt.Printf("%v\n", issue.err)
+		}
+	}
+	if !reqIssues {
+		fmt.Printf("none found\n")
+	}
+
+	fmt.Printf("\nDNS issues\n")
+	fmt.Printf("----------\n")
+
+	for _, issue := range issues {
+		if issue.kind == "dns" {
+			DNSIssues = true
+			fmt.Printf("%v\n", issue.err)
+		}
+	}
+	if !DNSIssues {
+		fmt.Printf("none found\n")
+	}
+
+	fmt.Printf("\nPotential vulnerabilities\n")
+	fmt.Printf("-------------------------\n")
+
 	for _, issue := range issues {
 		if issue.kind == "vuln" {
+			potVulns = true
 			fmt.Printf("%s %v\n", issue.url, issue.err)
 		}
 	}
-	fmt.Printf("\nRequests\n\n")
-	for _, issue := range issues {
-		if issue.kind == "request" {
-			fmt.Printf("%v\n", issue.err)
-		}
-	}
-	fmt.Printf("\nDNS\n\n")
-	for _, issue := range issues {
-		if issue.kind == "dns" {
-			fmt.Printf("%v\n", issue.err)
-		}
+	if !potVulns {
+		fmt.Printf("none found\n")
 	}
 }
 
 var resolveMutex sync.Mutex
 var nameservers []string
+
+func PadToWidth(input string, char string, inputLengthOverride int, trimToWidth bool) (output string) {
+	// Split string into lines
+	var lines []string
+	var newLines []string
+	if strings.Contains(input, "\n") {
+		lines = strings.Split(input, "\n")
+	} else {
+		lines = []string{input}
+	}
+	var paddingSize int
+	for i, line := range lines {
+		width, _, _ := terminal.GetSize(0)
+		if width == -1 {
+			width = 80
+		}
+		// No padding for a line that already meets or exceeds console width
+		var length int
+		if inputLengthOverride > 0 {
+			length = inputLengthOverride
+		} else {
+			length = len(line)
+		}
+		if length >= width {
+			if trimToWidth {
+				output = line[0:width]
+			} else {
+				output = input
+			}
+			return
+		} else if i == len(lines)-1 {
+			if inputLengthOverride != 0 {
+				paddingSize = width - inputLengthOverride
+			} else {
+				paddingSize = width - len(line)
+			}
+			if paddingSize >= 1 {
+				newLines = append(newLines, fmt.Sprintf("%s%s\r", line, strings.Repeat(char, paddingSize)))
+			} else {
+				newLines = append(newLines, fmt.Sprintf("%s\r", line))
+			}
+		} else {
+			var suffix string
+			newLines = append(newLines, fmt.Sprintf("%s%s%s\n", line, strings.Repeat(char, paddingSize), suffix))
+		}
+	}
+	output = strings.Join(newLines, "")
+	return
+}
 
 func checkResolves(fqdn string) (issues issues) {
 	c := new(dns.Client)
@@ -185,14 +256,15 @@ func checkResolves(fqdn string) (issues issues) {
 	rand.Seed(time.Now().UnixNano())
 	ns := rand.Int() % len(nameservers)
 	record, _, err = c.Exchange(m, net.JoinHostPort(nameservers[ns], strconv.Itoa(53)))
-	fmt.Printf("%s %+v\n", fqdn, record.Answer)
+	//if record != nil {
+	//	fmt.Printf("%s %+v\n", fqdn, record.Answer)
+	//}
 	resolveMutex.Unlock()
 	if err != nil {
 		err = errors.Errorf("%s could not be resolved (%v)\n", fqdn, err)
 		issues = append(issues, issue{kind: "dns", fqdn: fqdn, err: err})
 		return
 	}
-	//fmt.Println("Resolve SUCCESS")
 
 	if len(record.Answer) == 0 {
 		err = errors.Errorf("%s could not be resolved (no answer from %s)", fqdn, nameservers[ns])
@@ -259,6 +331,12 @@ var vPatterns = []vPattern{
 		bodyStrings:     []string{"Code: NoSuchBucket"},
 		bodyStringMatch: "all",
 	},
+	{
+		platform:        "Tumblr",
+		responseCodes:   []int{404},
+		bodyStrings:     []string{"Not found.", "assets.tumblr.com"},
+		bodyStringMatch: "all",
+	},
 }
 
 func contains(s []int, e int) bool {
@@ -273,11 +351,11 @@ func contains(s []int, e int) bool {
 func checkVulnerable(url string, response *http.Response) (vuln issue) {
 	for _, pattern := range vPatterns {
 		if len(pattern.responseCodes) > 0 {
-			if pattern.responseCodes == nil || ! contains(pattern.responseCodes, response.StatusCode) {
+			if pattern.responseCodes == nil || !contains(pattern.responseCodes, response.StatusCode) {
 				continue
 			}
 		}
-		if checkBodyResponse(pattern.bodyStrings, response.Body) {
+		if checkBodyResponse(pattern, response.Body) {
 			return issue{
 				url:  url,
 				kind: "vuln",
@@ -288,17 +366,18 @@ func checkVulnerable(url string, response *http.Response) (vuln issue) {
 	return
 }
 
-func checkBodyResponse(bodyStrings []string, body io.ReadCloser) (result bool) {
+func checkBodyResponse(pattern vPattern, body io.ReadCloser) (result bool) {
 	buf := new(bytes.Buffer)
 	buf.ReadFrom(body)
 	bodyText := buf.String()
-	for _, bodyString := range bodyStrings {
+	for _, bodyString := range pattern.bodyStrings {
 		if strings.Contains(bodyText, bodyString) {
 			result = true
+		} else if pattern.bodyStringMatch == "all" {
+			result = false
 			return
 		}
 	}
-
 	return
 }
 
@@ -323,10 +402,21 @@ func checkDomains(path string) (err error) {
 	}
 	close(jobs)
 
+	var progress string
 	for a := 1; a <= numDomains; a++ {
-		fmt.Printf("%d/%d\n", a, numDomains)
+		progress = fmt.Sprintf("Processing... %d/%d %s", a, numDomains, domains[a-1])
+		progress = PadToWidth(progress, " ", 0, true)
+		width, _, _ := terminal.GetSize(0)
+		if len(progress) == width {
+			fmt.Printf(progress[0:width-3] + "   \r")
+		} else {
+			fmt.Print(progress)
+		}
+		//fmt.Printf("%d/%d\n", a, numDomains)
 		<-results
 	}
+	// clear
+	fmt.Printf("%s", PadToWidth("", " ", 0, false))
 	return
 }
 
@@ -334,10 +424,10 @@ func worker(id int, jobs <-chan string, results chan<- bool) {
 	for j := range jobs {
 		resolveIssues := checkResolves(j)
 		if len(resolveIssues) > 0 {
-			fmt.Printf("failed to resolve: %s\n", j)
+			//fmt.Printf("failed to resolve: %s\n", j)
 			domainIssues = append(domainIssues, resolveIssues...)
 		} else {
-			fmt.Printf("requesting %s\n", j)
+			//fmt.Printf("requesting %s\n", j)
 			responseIssues := checkResponse(j, protocols)
 			if len(responseIssues) > 0 {
 				domainIssues = append(domainIssues, responseIssues...)
