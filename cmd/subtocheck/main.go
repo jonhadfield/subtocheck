@@ -256,20 +256,19 @@ func checkResolves(fqdn string) (issues issues) {
 	rand.Seed(time.Now().UnixNano())
 	ns := rand.Int() % len(nameservers)
 	record, _, err = c.Exchange(m, net.JoinHostPort(nameservers[ns], strconv.Itoa(53)))
-	//if record != nil {
-	//	fmt.Printf("%s %+v\n", fqdn, record.Answer)
-	//}
 	resolveMutex.Unlock()
 	if err != nil {
 		err = errors.Errorf("%s could not be resolved (%v)\n", fqdn, err)
 		issues = append(issues, issue{kind: "dns", fqdn: fqdn, err: err})
-		return
-	}
-
-	if len(record.Answer) == 0 {
+	} else if len(record.Answer) == 0 {
 		err = errors.Errorf("%s could not be resolved (no answer from %s)", fqdn, nameservers[ns])
 		issues = append(issues, issue{kind: "dns", fqdn: fqdn, err: err})
+	} else if record.Rcode != 0 {
+		err = errors.Errorf("%s could not be resolved (%s from %s)", fqdn, dns.RcodeToString[record.Rcode],
+			nameservers[ns])
+		issues = append(issues, issue{kind: "dns", fqdn: fqdn, err: err})
 	}
+
 	return
 }
 
