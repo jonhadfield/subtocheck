@@ -32,6 +32,8 @@ import (
 	"strings"
 	"io"
 	"bytes"
+	"sync"
+	"math/rand"
 )
 
 var (
@@ -93,15 +95,13 @@ Commands:
 {{end}}\
 `
 var (
-	httpPrefix   = "http://"
-	httpsPrefix  = "https://"
-	resolverHost = "1.1.1.1"
-	resolverPort = 53
-	protocols    = []string{"http", "https"}
+	httpPrefix  = "http://"
+	httpsPrefix = "https://"
+	protocols   = []string{"http", "https"}
 )
 
 type issue struct {
-	kind   string  // vuln, request, dns
+	kind   string // vuln, request, dns
 	fqdn   string
 	url    string
 	detail string
@@ -111,6 +111,17 @@ type issue struct {
 type issues []issue
 
 func main() {
+	nameservers = []string{
+		"8.8.8.8",         // google
+		"8.8.4.4",         // google
+		"209.244.0.3",     // level3
+		"209.244.0.4",     // level3
+		"1.1.1.1",         // cloudflare
+		"1.0.0.1",         // cloudflare
+		"9.9.9.9",         // quad9
+		"149.112.112.112", // quad9
+	}
+
 	if tag != "" && buildDate != "" {
 		versionOutput = fmt.Sprintf("[%s-%s] %s UTC", tag, sha, buildDate)
 	} else {
@@ -128,54 +139,63 @@ func main() {
 		fmt.Printf(err.Error())
 		os.Exit(1)
 	} else {
-		var issues issues
-		issues = checkDomains(domainsPath)
-		if len(issues) > 0 {
-			displayIssues(issues)
+		checkDomains(domainsPath)
+		if len(domainIssues) > 0 {
+			displayIssues(domainIssues)
 		} else {
-			fmt.Println("No issues found.")
+			fmt.Println("\nNo issues found.")
 		}
 
 	}
 }
 
 func displayIssues(issues issues) {
-	fmt.Printf("\n- Vulnerabilities\n\n")
+	fmt.Printf("\nVulnerabilities\n\n")
 	for _, issue := range issues {
 		if issue.kind == "vuln" {
-			fmt.Printf("  %s\n    %v\n", issue.url, issue.err)
+			fmt.Printf("%s %v\n", issue.url, issue.err)
 		}
 	}
-	fmt.Printf("\n- Requests\n\n")
+	fmt.Printf("\nRequests\n\n")
 	for _, issue := range issues {
 		if issue.kind == "request" {
-			fmt.Printf("  %s\n    %v\n", issue.fqdn, issue.err)
+			fmt.Printf("%v\n", issue.err)
 		}
 	}
-	fmt.Printf("\n- DNS\n\n")
+	fmt.Printf("\nDNS\n\n")
 	for _, issue := range issues {
 		if issue.kind == "dns" {
-			fmt.Printf("  %s\n    %v\n", issue.fqdn, issue.err)
+			fmt.Printf("%v\n", issue.err)
 		}
 	}
 }
+
+var resolveMutex sync.Mutex
+var nameservers []string
 
 func checkResolves(fqdn string) (issues issues) {
 	c := new(dns.Client)
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(fqdn), dns.TypeA)
 	m.RecursionDesired = true
-	c.ReadTimeout = 2 * time.Second
-	c.WriteTimeout = 2 * time.Second
+	c.Timeout = 1500 * time.Millisecond
 	var record *dns.Msg
 	var err error
-	record, _, err = c.Exchange(m, net.JoinHostPort(resolverHost, strconv.Itoa(resolverPort)))
+	resolveMutex.Lock()
+	rand.Seed(time.Now().UnixNano())
+	ns := rand.Int() % len(nameservers)
+	record, _, err = c.Exchange(m, net.JoinHostPort(nameservers[ns], strconv.Itoa(53)))
+	fmt.Printf("%s %+v\n", fqdn, record.Answer)
+	resolveMutex.Unlock()
 	if err != nil {
+		err = errors.Errorf("%s could not be resolved (%v)\n", fqdn, err)
 		issues = append(issues, issue{kind: "dns", fqdn: fqdn, err: err})
 		return
 	}
+	//fmt.Println("Resolve SUCCESS")
+
 	if len(record.Answer) == 0 {
-		err = errors.New("name could not be resolved")
+		err = errors.Errorf("%s could not be resolved (no answer from %s)", fqdn, nameservers[ns])
 		issues = append(issues, issue{kind: "dns", fqdn: fqdn, err: err})
 	}
 	return
@@ -233,6 +253,12 @@ var vPatterns = []vPattern{
 		bodyStrings:     []string{"//www.herokucdn.com/error-pages/no-such-app.html"},
 		bodyStringMatch: "all",
 	},
+	{
+		platform:        "S3",
+		responseCodes:   []int{404},
+		bodyStrings:     []string{"Code: NoSuchBucket"},
+		bodyStringMatch: "all",
+	},
 }
 
 func contains(s []int, e int) bool {
@@ -253,9 +279,9 @@ func checkVulnerable(url string, response *http.Response) (vuln issue) {
 		}
 		if checkBodyResponse(pattern.bodyStrings, response.Body) {
 			return issue{
-				url:    url,
-				kind:   "vuln",
-				err: 	errors.Errorf("matches pattern for platform: %s", pattern.platform),
+				url:  url,
+				kind: "vuln",
+				err:  errors.Errorf("matches pattern for platform: %s", pattern.platform),
 			}
 		}
 	}
@@ -276,20 +302,47 @@ func checkBodyResponse(bodyStrings []string, body io.ReadCloser) (result bool) {
 	return
 }
 
-func checkDomains(path string) (domainIssues issues) {
+var domainIssues issues
+
+func checkDomains(path string) (err error) {
 	file, _ := os.Open(path)
 	domainScanner := bufio.NewScanner(file)
+	var domains []string
 	for domainScanner.Scan() {
-		fmt.Printf("Checking: %s\n", domainScanner.Text())
-		resolveIssues := checkResolves(domainScanner.Text())
-		if len(resolveIssues) > 0 {
-			domainIssues = append(domainIssues, resolveIssues...)
-			continue
-		}
-		responseIssues := checkResponse(domainScanner.Text(), protocols)
-		if len(responseIssues) > 0 {
-			domainIssues = append(domainIssues, responseIssues...)
-		}
+		domains = append(domains, domainScanner.Text())
+	}
+	jobs := make(chan string, len(domains))
+	results := make(chan bool, len(domains))
+
+	for w := 1; w <= 10; w++ {
+		go worker(w, jobs, results)
+	}
+	numDomains := len(domains)
+	for j := 0; j < numDomains; j++ {
+		jobs <- domains[j]
+	}
+	close(jobs)
+
+	for a := 1; a <= numDomains; a++ {
+		fmt.Printf("%d/%d\n", a, numDomains)
+		<-results
 	}
 	return
+}
+
+func worker(id int, jobs <-chan string, results chan<- bool) {
+	for j := range jobs {
+		resolveIssues := checkResolves(j)
+		if len(resolveIssues) > 0 {
+			fmt.Printf("failed to resolve: %s\n", j)
+			domainIssues = append(domainIssues, resolveIssues...)
+		} else {
+			fmt.Printf("requesting %s\n", j)
+			responseIssues := checkResponse(j, protocols)
+			if len(responseIssues) > 0 {
+				domainIssues = append(domainIssues, responseIssues...)
+			}
+		}
+		results <- true
+	}
 }
