@@ -151,44 +151,49 @@ func main() {
 }
 
 func displayIssues(issues issues) {
-	var reqIssues, DNSIssues, potVulns bool
-
-	fmt.Printf("\nRequest issues\n")
-	fmt.Printf("--------------\n")
+	var reqIssues, DNSIssues, potVulns []issue
+	var txtNoIssuesFound = "none found\n"
 	for _, issue := range issues {
-		if issue.kind == "request" {
-			reqIssues = true
-			fmt.Printf("%v\n", issue.err)
+		switch issue.kind {
+		case "request":
+			reqIssues = append(reqIssues, issue)
+		case "dns":
+			DNSIssues = append(DNSIssues, issue)
+		case "vuln":
+			potVulns = append(potVulns, issue)
 		}
 	}
-	if !reqIssues {
-		fmt.Printf("none found\n")
-	}
 
-	fmt.Printf("\nDNS issues\n")
-	fmt.Printf("----------\n")
-
-	for _, issue := range issues {
-		if issue.kind == "dns" {
-			DNSIssues = true
-			fmt.Printf("%v\n", issue.err)
+	fmt.Printf("\nRequest issues\n--------------\n")
+	if len(reqIssues) > 0 {
+		for _, issue := range reqIssues {
+			if issue.kind == "request" {
+				fmt.Printf("%v\n", issue.err)
+			}
 		}
-	}
-	if !DNSIssues {
-		fmt.Printf("none found\n")
+	} else {
+		fmt.Printf(txtNoIssuesFound)
 	}
 
-	fmt.Printf("\nPotential vulnerabilities\n")
-	fmt.Printf("-------------------------\n")
-
-	for _, issue := range issues {
-		if issue.kind == "vuln" {
-			potVulns = true
-			fmt.Printf("%s %v\n", issue.url, issue.err)
+	fmt.Printf("\nDNS issues\n----------\n")
+	if len(DNSIssues) > 0 {
+		for _, issue := range DNSIssues {
+			if issue.kind == "dns" {
+				fmt.Printf("%v\n", issue.err)
+			}
 		}
+	} else {
+		fmt.Printf(txtNoIssuesFound)
 	}
-	if !potVulns {
-		fmt.Printf("none found\n")
+	fmt.Printf("\nPotential vulnerabilities\n-------------------------\n")
+	if len(potVulns) > 0 {
+		for _, issue := range potVulns {
+			if issue.kind == "vuln" {
+				fmt.Printf("%s %v\n", issue.url, issue.err)
+			}
+		}
+	} else {
+		fmt.Printf(txtNoIssuesFound)
 	}
 }
 
