@@ -19,15 +19,14 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"github.com/pkg/errors"
-	"gopkg.in/alecthomas/kingpin.v2"
 	"net/http"
 	"os"
 
+	"github.com/pkg/errors"
+	"gopkg.in/alecthomas/kingpin.v2"
+
 	"bytes"
 	"crypto/tls"
-	"github.com/miekg/dns"
-	"golang.org/x/crypto/ssh/terminal"
 	"io"
 	"math/rand"
 	"net"
@@ -35,6 +34,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/miekg/dns"
+	"golang.org/x/crypto/ssh/terminal"
 )
 
 var (
@@ -102,11 +104,10 @@ var (
 )
 
 type issue struct {
-	kind   string // vuln, request, dns
-	fqdn   string
-	url    string
-	detail string
-	err    error
+	kind string // vuln, request, dns
+	fqdn string
+	url  string
+	err  error
 }
 
 type issues []issue
@@ -137,7 +138,7 @@ func main() {
 	var domainsPath string
 	domainsPath, err = getDomainListFilePath(*domainListPath)
 	if err != nil {
-		fmt.Printf(err.Error())
+		fmt.Println(err.Error())
 		os.Exit(1)
 	} else {
 		checkDomains(domainsPath)
@@ -152,7 +153,7 @@ func main() {
 
 func displayIssues(issues issues) {
 	var reqIssues, DNSIssues, potVulns []issue
-	var txtNoIssuesFound = "none found\n"
+	var txtNoIssuesFound = "none found"
 	for _, issue := range issues {
 		switch issue.kind {
 		case "request":
@@ -172,7 +173,7 @@ func displayIssues(issues issues) {
 			}
 		}
 	} else {
-		fmt.Printf(txtNoIssuesFound)
+		fmt.Println(txtNoIssuesFound)
 	}
 
 	fmt.Printf("\nDNS issues\n----------\n")
@@ -183,7 +184,7 @@ func displayIssues(issues issues) {
 			}
 		}
 	} else {
-		fmt.Printf(txtNoIssuesFound)
+		fmt.Println(txtNoIssuesFound)
 	}
 	fmt.Printf("\nPotential vulnerabilities\n-------------------------\n")
 	if len(potVulns) > 0 {
@@ -193,14 +194,14 @@ func displayIssues(issues issues) {
 			}
 		}
 	} else {
-		fmt.Printf(txtNoIssuesFound)
+		fmt.Println(txtNoIssuesFound)
 	}
 }
 
 var resolveMutex sync.Mutex
 var nameservers []string
 
-func PadToWidth(input string, char string, inputLengthOverride int, trimToWidth bool) (output string) {
+func padToWidth(input string, trimToWidth bool) (output string) {
 	// Split string into lines
 	var lines []string
 	var newLines []string
@@ -216,12 +217,8 @@ func PadToWidth(input string, char string, inputLengthOverride int, trimToWidth 
 			width = 80
 		}
 		// No padding for a line that already meets or exceeds console width
-		var length int
-		if inputLengthOverride > 0 {
-			length = inputLengthOverride
-		} else {
-			length = len(line)
-		}
+		length := len(line)
+
 		if length >= width {
 			if trimToWidth {
 				output = line[0:width]
@@ -230,19 +227,15 @@ func PadToWidth(input string, char string, inputLengthOverride int, trimToWidth 
 			}
 			return
 		} else if i == len(lines)-1 {
-			if inputLengthOverride != 0 {
-				paddingSize = width - inputLengthOverride
-			} else {
-				paddingSize = width - len(line)
-			}
+			paddingSize = width - len(line)
 			if paddingSize >= 1 {
-				newLines = append(newLines, fmt.Sprintf("%s%s\r", line, strings.Repeat(char, paddingSize)))
+				newLines = append(newLines, fmt.Sprintf("%s%s\r", line, strings.Repeat(" ", paddingSize)))
 			} else {
 				newLines = append(newLines, fmt.Sprintf("%s\r", line))
 			}
 		} else {
 			var suffix string
-			newLines = append(newLines, fmt.Sprintf("%s%s%s\n", line, strings.Repeat(char, paddingSize), suffix))
+			newLines = append(newLines, fmt.Sprintf("%s%s%s\n", line, strings.Repeat(" ", paddingSize), suffix))
 		}
 	}
 	output = strings.Join(newLines, "")
@@ -287,20 +280,20 @@ func checkResponse(fqdn string, protocols []string) (issues issues) {
 		Timeout:   3 * time.Second,
 	}
 	for _, protocol := range protocols {
-		var httpUrl string
+		var httpURL string
 		if protocol == "http" {
-			httpUrl = httpPrefix + fqdn
+			httpURL = httpPrefix + fqdn
 		} else if protocol == "https" {
-			httpUrl = httpsPrefix + fqdn
+			httpURL = httpsPrefix + fqdn
 		}
 		var httpResp *http.Response
 		var err error
-		httpResp, err = client.Get(httpUrl)
+		httpResp, err = client.Get(httpURL)
 		if err != nil {
 			issues = append(issues, issue{kind: "request", fqdn: fqdn, err: err})
 		}
 		if httpResp != nil {
-			vulnIssue := checkVulnerable(httpUrl, httpResp)
+			vulnIssue := checkVulnerable(httpURL, httpResp)
 			if vulnIssue.kind != "" {
 				issues = append(issues, vulnIssue)
 			}
@@ -372,7 +365,11 @@ func checkVulnerable(url string, response *http.Response) (vuln issue) {
 
 func checkBodyResponse(pattern vPattern, body io.ReadCloser) (result bool) {
 	buf := new(bytes.Buffer)
-	buf.ReadFrom(body)
+	_, err := buf.ReadFrom(body)
+	if err != nil {
+		fmt.Printf("%+v\n", err)
+		os.Exit(1)
+	}
 	bodyText := buf.String()
 	for _, bodyString := range pattern.bodyStrings {
 		if strings.Contains(bodyText, bodyString) {
@@ -387,7 +384,7 @@ func checkBodyResponse(pattern vPattern, body io.ReadCloser) (result bool) {
 
 var domainIssues issues
 
-func checkDomains(path string) (err error) {
+func checkDomains(path string) {
 	file, _ := os.Open(path)
 	domainScanner := bufio.NewScanner(file)
 	var domains []string
@@ -409,29 +406,28 @@ func checkDomains(path string) (err error) {
 	var progress string
 	for a := 1; a <= numDomains; a++ {
 		progress = fmt.Sprintf("Processing... %d/%d %s", a, numDomains, domains[a-1])
-		progress = PadToWidth(progress, " ", 0, true)
+		progress = padToWidth(progress, true)
 		width, _, _ := terminal.GetSize(0)
 		if len(progress) == width {
 			fmt.Printf(progress[0:width-3] + "   \r")
 		} else {
 			fmt.Print(progress)
 		}
-		//fmt.Printf("%d/%d\n", a, numDomains)
 		<-results
 	}
 	// clear
-	fmt.Printf("%s", PadToWidth("", " ", 0, false))
-	return
+	fmt.Printf("%s", padToWidth(" ", false))
 }
 
 func worker(id int, jobs <-chan string, results chan<- bool) {
 	for j := range jobs {
+		if *debug {
+			fmt.Printf("worker: %d\n", id)
+		}
 		resolveIssues := checkResolves(j)
 		if len(resolveIssues) > 0 {
-			//fmt.Printf("failed to resolve: %s\n", j)
 			domainIssues = append(domainIssues, resolveIssues...)
 		} else {
-			//fmt.Printf("requesting %s\n", j)
 			responseIssues := checkResponse(j, protocols)
 			if len(responseIssues) > 0 {
 				domainIssues = append(domainIssues, responseIssues...)
