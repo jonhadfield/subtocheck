@@ -196,10 +196,8 @@ var domainIssues issues
 
 func CheckDomains(path string, configPath string, debug *bool) {
 	var conf Config
-	fmt.Printf("configPath: %s\n", configPath)
 	if configPath != "" {
 		conf = readConfig(configPath)
-		//fmt.Printf("config = %+v\n", conf)
 	}
 	file, _ := os.Open(path)
 	domainScanner := bufio.NewScanner(file)
@@ -238,7 +236,6 @@ func CheckDomains(path string, configPath string, debug *bool) {
 	fmt.Printf("%s", padToWidth(" ", false))
 	// get issues summary
 	pIssues := getIssuesSummary(domainIssues)
-	//if len(processedIssues) > 0 {
 	if !reflect.DeepEqual(pIssues, processedIssues{}) {
 		displayIssues(pIssues)
 	} else {
@@ -247,7 +244,9 @@ func CheckDomains(path string, configPath string, debug *bool) {
 
 	// send notifications
 	if conf.Email.Provider != "" {
-		fmt.Println("\nSending email")
+		if *debug {
+			fmt.Println("\nDEBUG: sending email")
+		}
 		emailErr := emailResults(conf.Email, pIssues)
 		if emailErr != nil {
 			fmt.Println("failed to send email")

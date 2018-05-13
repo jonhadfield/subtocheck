@@ -10,6 +10,8 @@ import (
 
 	"os"
 
+	"time"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -68,6 +70,48 @@ func validateEmailSettings(email Email) (err error) {
 	return
 }
 
+func generateDNSIssueList(dnsIssues []issue) (filePath string) {
+	timeStamp := time.Now().UTC().Format("20060102150405")
+	filePath = fmt.Sprintf("dns_issues_%s.txt", timeStamp)
+	// convert issues to file content
+	var buffer bytes.Buffer
+	for _, dnsIssue := range dnsIssues {
+		buffer.WriteString(dnsIssue.fqdn + " - " + dnsIssue.err.Error() + "\n")
+	}
+	f, createFileErr := os.Create(filePath)
+	if createFileErr != nil {
+		panic(createFileErr)
+	}
+	defer f.Close()
+	_, writeErr := f.Write(buffer.Bytes())
+	if writeErr != nil {
+		panic(writeErr)
+	}
+	f.Sync()
+	return
+}
+
+func generateRequestIssueList(requestIssues []issue) (filePath string) {
+	timeStamp := time.Now().UTC().Format("20060102150405")
+	filePath = fmt.Sprintf("request_issues_%s.txt", timeStamp)
+	// convert issues to file content
+	var buffer bytes.Buffer
+	for _, requestIssue := range requestIssues {
+		buffer.WriteString(requestIssue.url + " - " + requestIssue.err.Error() + "\n")
+	}
+	f, createFileErr := os.Create(filePath)
+	if createFileErr != nil {
+		panic(createFileErr)
+	}
+	defer f.Close()
+	_, writeErr := f.Write(buffer.Bytes())
+	if writeErr != nil {
+		panic(writeErr)
+	}
+	f.Sync()
+	return
+}
+
 func emailResults(email Email, pIssues processedIssues) (err error) {
 	msg := gomail.NewMessage()
 	msg.SetHeader("From", email.Source)
@@ -121,7 +165,19 @@ func emailResults(email Email, pIssues processedIssues) (err error) {
 	// close table
 	body = body + "</table>"
 	msg.SetBody("text/html", body)
-	//msg.Attach(filePath)
+
+	var dnsIssuesFilePath, requestIssuesFilePath string
+	if len(pIssues.DNS) > 0 {
+		// generate DNS issues file to attach
+		dnsIssuesFilePath = generateDNSIssueList(pIssues.DNS)
+		msg.Attach(dnsIssuesFilePath)
+	}
+
+	if len(pIssues.request) > 0 {
+		// generate requests issues file to attach
+		requestIssuesFilePath = generateRequestIssueList(pIssues.request)
+		msg.Attach(requestIssuesFilePath)
+	}
 
 	var emailRaw bytes.Buffer
 	_, err = msg.WriteTo(&emailRaw)
@@ -129,6 +185,7 @@ func emailResults(email Email, pIssues processedIssues) (err error) {
 		err = errors.WithStack(err)
 		return
 	}
+
 	switch email.Provider {
 	case "ses":
 		var sess *session.Session
@@ -175,5 +232,19 @@ func emailResults(email Email, pIssues processedIssues) (err error) {
 	case "smtp":
 		// TBC
 	}
+	// clean up
+	if dnsIssuesFilePath != "" {
+		delDNSErr := os.Remove(dnsIssuesFilePath)
+		if delDNSErr != nil {
+			fmt.Println(delDNSErr)
+		}
+	}
+	if requestIssuesFilePath != "" {
+		delReqErr := os.Remove(requestIssuesFilePath)
+		if delReqErr != nil {
+			fmt.Println(delReqErr)
+		}
+	}
+
 	return
 }

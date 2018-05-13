@@ -50,7 +50,6 @@ func readConfig(path string) (config Config) {
 		os.Exit(1)
 	}
 	config, err = ParseConfigFileContent(configFileContent)
-	fmt.Printf("%+v\n", config)
 	if err != nil {
 		fmt.Printf("failed to parse configuration: \"%s\"\n", path)
 		fmt.Println(" -- error --")
