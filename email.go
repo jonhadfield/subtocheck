@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"crypto/tls"
 	"os"
 
 	"time"
@@ -226,13 +227,28 @@ func emailResults(email Email, pIssues processedIssues) (err error) {
 		input := ses.SendRawEmailInput{Source: source, Destinations: destinations, RawMessage: &message}
 		_, err = svc.SendRawEmail(&input)
 		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			panic(err)
 		}
 	case "smtp":
-		// TBC
+		msg.SetHeader("To", email.Recipients...)
+		host := email.Host
+		port, _ := strconv.Atoi(email.Port)
+		dialer := gomail.NewPlainDialer(host, port, email.Username, email.Password)
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: false,
+			ServerName:         host,
+		}
+		dialer.TLSConfig = tlsConfig
+		err = dialer.DialAndSend(msg)
+		if err != nil {
+			cleanUpFiles(dnsIssuesFilePath, requestIssuesFilePath)
+			panic(err)
+		}
 	}
-	// clean up
+	return
+}
+
+func cleanUpFiles(dnsIssuesFilePath string, requestIssuesFilePath string) {
 	if dnsIssuesFilePath != "" {
 		delDNSErr := os.Remove(dnsIssuesFilePath)
 		if delDNSErr != nil {
@@ -245,6 +261,4 @@ func emailResults(email Email, pIssues processedIssues) (err error) {
 			fmt.Println(delReqErr)
 		}
 	}
-
-	return
 }
