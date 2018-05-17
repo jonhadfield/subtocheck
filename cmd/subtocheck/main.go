@@ -29,6 +29,7 @@ import (
 var (
 	domainListPath = kingpin.Flag("domains", "domain list file path").Default("domains.txt").String()
 	configPath     = kingpin.Flag("config", "config file").String()
+	quiet          = kingpin.Flag("quiet", "suppress command line output").Bool()
 	debug          = kingpin.Flag("debug", "enable debug").Bool()
 )
 
@@ -97,14 +98,15 @@ func main() {
 	kingpin.Parse()
 	kingpin.UsageTemplate(usageTemplate)
 
-	var err error
+	if *quiet && *configPath == "" {
+		fmt.Println("warning: running without console output and without email config ¯\\_(ツ)_/¯")
+	}
 
 	var domainsPath string
-	domainsPath, err = getDomainListFilePath(*domainListPath)
+	domainsPath, err := getDomainListFilePath(*domainListPath)
 	if err != nil {
-		fmt.Println(err.Error())
-		os.Exit(1)
+		panic(err)
 	} else {
-		subtocheck.CheckDomains(domainsPath, *configPath, debug)
+		subtocheck.CheckDomains(domainsPath, configPath, debug, quiet)
 	}
 }

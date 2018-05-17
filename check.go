@@ -194,10 +194,10 @@ func checkBodyResponse(pattern vPattern, body io.ReadCloser) (result bool) {
 
 var domainIssues issues
 
-func CheckDomains(path string, configPath string, debug *bool) {
+func CheckDomains(path string, configPath *string, debug *bool, quiet *bool) {
 	var conf Config
-	if configPath != "" {
-		conf = readConfig(configPath)
+	if *configPath != "" {
+		conf = readConfig(*configPath)
 	}
 	file, _ := os.Open(path)
 	domainScanner := bufio.NewScanner(file)
@@ -222,26 +222,28 @@ func CheckDomains(path string, configPath string, debug *bool) {
 
 	var progress string
 	for a := 1; a <= numDomains; a++ {
-		progress = fmt.Sprintf("Processing... %d/%d %s", a, numDomains, domains[a-1])
-		progress = padToWidth(progress, true)
-		width, _, _ := terminal.GetSize(0)
-		if len(progress) == width {
-			fmt.Printf(progress[0:width-3] + "   \r")
-		} else {
-			fmt.Print(progress)
+		if !*quiet {
+			progress = fmt.Sprintf("Processing... %d/%d %s", a, numDomains, domains[a-1])
+			progress = padToWidth(progress, true)
+			width, _, _ := terminal.GetSize(0)
+			if len(progress) == width {
+				fmt.Printf(progress[0:width-3] + "   \r")
+			} else {
+				fmt.Print(progress)
+			}
 		}
+
 		<-results
 	}
-	// clear
-	fmt.Printf("%s", padToWidth(" ", false))
-	// get issues summary
 	pIssues := getIssuesSummary(domainIssues)
-	if !reflect.DeepEqual(pIssues, processedIssues{}) {
-		displayIssues(pIssues)
-	} else {
-		fmt.Println("\nno issues found.")
+	if !*quiet {
+		fmt.Printf("%s", padToWidth(" ", false))
+		if !reflect.DeepEqual(pIssues, processedIssues{}) {
+			displayIssues(pIssues)
+		} else {
+			fmt.Println("\nno issues found.")
+		}
 	}
-
 	// send notifications
 	if conf.Email.Provider != "" {
 		if *debug {
