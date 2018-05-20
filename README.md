@@ -101,6 +101,12 @@ For SES, use the following:
  
  If you decide to run outside of AWS then subtocheck will read credentials from the user's environment, e.g. Environment Variables, if 'aws_access_key_id' and 'aws_secret_access_key' are not specified.
 
+ Run subtocheck, specifying email configuration
+ 
+ ``
+ $ subtocheck --config <config>.yaml
+ ``
+
 ## <a name="contributing"></a>contributing
 
 If you find any bugs or want to add another provider pattern, please create and issue or submit a PR. Thanks.
