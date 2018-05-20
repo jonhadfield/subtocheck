@@ -10,12 +10,12 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-type Config struct {
+type config struct {
 	Defined bool
-	Email   Email `yaml:"email"`
+	Email   emailConfig `yaml:"email"`
 }
 
-type Email struct {
+type emailConfig struct {
 	Provider           string
 	Host               string
 	Port               string
@@ -30,7 +30,7 @@ type Email struct {
 	Recipients         []string
 }
 
-func ParseConfigFileContent(content []byte) (config Config, err error) {
+func parseConfigFileContent(content []byte) (config config, err error) {
 	unmarshalErr := yaml.Unmarshal(content, &config)
 	if unmarshalErr != nil {
 		err = errors.WithStack(unmarshalErr)
@@ -39,7 +39,7 @@ func ParseConfigFileContent(content []byte) (config Config, err error) {
 	return
 }
 
-func readConfig(path string) (config Config) {
+func readConfig(path string) (config config) {
 	var configFileContent []byte
 	var err error
 	configFileContent, err = ioutil.ReadFile(path)
@@ -49,7 +49,7 @@ func readConfig(path string) (config Config) {
 		fmt.Printf("%+v\n", err)
 		os.Exit(1)
 	}
-	config, err = ParseConfigFileContent(configFileContent)
+	config, err = parseConfigFileContent(configFileContent)
 	if err != nil {
 		fmt.Printf("failed to parse configuration: \"%s\"\n", path)
 		fmt.Println(" -- error --")

@@ -23,21 +23,21 @@ import (
 
 func extractEmail(input string) (output string) {
 	if strings.Contains(input, "<") {
-		output = GetStringInBetween(input, "<", ">")
+		output = getStringInBetween(input, "<", ">")
 	} else {
 		output = input
 	}
 	return
 }
 
-func emailConfigDefined(email Email) (result bool) {
-	if !reflect.DeepEqual(email, Email{}) {
+func emailConfigDefined(email emailConfig) (result bool) {
+	if !reflect.DeepEqual(email, emailConfig{}) {
 		result = true
 	}
 	return
 }
 
-func validateEmailSettings(email Email) (err error) {
+func validateEmailSettings(email emailConfig) (err error) {
 	supportedProviders := []string{"ses", "smtp"}
 	if emailConfigDefined(email) {
 		if email.Provider == "" {
@@ -50,7 +50,7 @@ func validateEmailSettings(email Email) (err error) {
 			return
 		}
 
-		if !StringInSlice(email.Provider, supportedProviders) {
+		if !stringInSlice(email.Provider, supportedProviders) {
 			err = fmt.Errorf("email provider '%s' not supported", email.Provider)
 			return
 		}
@@ -113,7 +113,7 @@ func generateRequestIssueList(requestIssues []issue) (filePath string) {
 	return
 }
 
-func emailResults(email Email, pIssues processedIssues) (err error) {
+func emailResults(email emailConfig, pIssues processedIssues) (err error) {
 	msg := gomail.NewMessage()
 	msg.SetHeader("From", email.Source)
 	var emailSubject string

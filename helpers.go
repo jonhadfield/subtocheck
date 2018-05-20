@@ -57,7 +57,7 @@ func contains(s []int, e int) bool {
 	return false
 }
 
-func GetStringInBetween(str string, start string, end string) (result string) {
+func getStringInBetween(str string, start string, end string) (result string) {
 	s := strings.Index(str, start)
 	if s == -1 {
 		return
@@ -67,35 +67,13 @@ func GetStringInBetween(str string, start string, end string) (result string) {
 	return str[s:e]
 }
 
-func StringInSlice(a string, list []string) bool {
+func stringInSlice(a string, list []string) bool {
 	for _, b := range list {
 		if b == a {
 			return true
 		}
 	}
 	return false
-}
-
-func StringSliceToLower(input []string) (output []string) {
-	output = Map(input, strings.ToLower)
-	return
-}
-
-func StringInSliceContents(a string, list []string) bool {
-	for _, b := range list {
-		if strings.Contains(a, b) {
-			return true
-		}
-	}
-	return false
-}
-
-func Map(vs []string, f func(string) string) []string {
-	vsm := make([]string, len(vs))
-	for i, v := range vs {
-		vsm[i] = f(v)
-	}
-	return vsm
 }
 
 // PtrToStr returns a pointer to an existing string

@@ -194,8 +194,9 @@ func checkBodyResponse(pattern vPattern, body io.ReadCloser) (result bool) {
 
 var domainIssues issues
 
+// CheckDomains is called from cmd/subtocheck/main.go to kick off the scans
 func CheckDomains(path string, configPath *string, debug *bool, quiet *bool) {
-	var conf Config
+	var conf config
 	if *configPath != "" {
 		conf = readConfig(*configPath)
 	}
