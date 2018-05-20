@@ -8,6 +8,7 @@
 - [how does subtocheck work?](#how-does-subtocheck-work)
 - [install and run](#install-and-run)
 - [sending email reports](#sending-email-reports)
+- [contributing](#contributing)
 
 ## <a name="about"></a>about
 
@@ -25,16 +26,23 @@ The onus is on the customer to ensure their DNS only resolves to the provider wh
 
 ## <a name="how-does-subtocheckwork"></a>how does subtocheck work?
 
-subtocheck performs three checks:
-- DNS resolution of the FQDN
+subtocheck performs three checks for each FQDN:
+- DNS resolution
 - A request to the root of the domain over http and https
-- Test each response against a provider that no longer has a service configured for the FQDN
+- Test each response against a provider that no longer has a service configured
 
 If the name cannot be resolved then the FQDN is not in public DNS and therefore it isn't vulnerable to a public subdomain takeover.
 
 If the name can be resolved but responses cannot be retrieved over http nor https then it isn't vulnerable to a public subdomain takeover.
 
 If the response (over http and/or https) can be retrieved, then check the built-in signatures for a provider match. A provider match indicates someone may be able to host a service for your domain.
+
+#### checks are currently configured for providers:
+
+- AWS CloudFront
+- Heroku
+- AWS S3
+- Tumblr
 
 ## <a name="install-and-run"></a>install and run
 
@@ -93,3 +101,6 @@ For SES, use the following:
  
  If you decide to run outside of AWS then subtocheck will read credentials from the user's environment, e.g. Environment Variables, if 'aws_access_key_id' and 'aws_secret_access_key' are not specified.
 
+## <a name="contributing"></a>contributing
+
+If you find any bugs or want to add another provider pattern, please create and issue or submit a PR. Thanks.
