@@ -4,26 +4,26 @@
 
 - [about](#about)
 - [compatibility](#compatibility)
-- [what is a subdomain takeover?](#what-is-a-subdomain-takeover?)
-- [how does subtocheck work?](#how-does-subtocheck-work?)
+- [what is a subdomain takeover?](#what-is-a-subdomain-takeover)
+- [how does subtocheck work?](#how-does-subtocheck-work)
 - [install and run](#install-and-run)
 - [sending email reports](#sending-email-reports)
 
-## about
+## <a name="about"></a>about
 
 subtocheck is a command line tool that accepts a list of FQDNs (Fully Qualified Domain Names) to see if they're vulnerable to being taken over.
 
-## compatibility
+## <a name="compatibility"></a>compatibility
 
 Only tested on Linux and MacOS, but should work on others.
 
-##what is a subdomain takeover?
+## <a name="what-is-a-subdomain-takeover"></a>what is a subdomain takeover?
 
 If you host a service on certain hosting providers, e.g. AWS CloudFront and Heroku, point a DNS record to the provider and then delete your service from that provider (but leave your DNS pointing at the provider), it is possible for someone else to create a new service on that provider that responds to requests for your domain.
 This is possible because a number of providers do not ask you to prove you own the domain before hosting your content. In other words, if you move out, someone else can move in and take advantage of your own domain still pointing to the provider.
 The onus is on the customer to ensure their DNS only resolves to the provider whilst that service is live.
 
-##how does subtocheck work?
+## <a name="how-does-subtocheckwork"></a>how does subtocheck work?
 
 subtocheck performs three checks:
 - DNS resolution of the FQDN
@@ -36,7 +36,7 @@ If the name can be resolved but responses cannot be retrieved over http nor http
 
 If the response (over http and/or https) can be retrieved, then check the built-in signatures for a provider match. A provider match indicates someone may be able to host a service for your domain.
 
-###install and run
+## <a name="install-and-run"></a>install and run
 
 Download the latest release here: https://github.com/jonhadfield/subtocheck/releases and install:
 
@@ -56,7 +56,7 @@ Run subtocheck
 $ subtocheck
 ``
 
-###sending email reports
+## <a name="sending-email-reports"></a>sending email reports
 
 SMTP (TLS Only) and AWS SES (Simple Email Service) are supported. If defined, then a report will be emailed that includes a body with a count of respective issues and a list of FQDNs that may be vulnerable to takeovers. Attached to the email will be separate lists of DNS and request issues encountered during the scan.
 
