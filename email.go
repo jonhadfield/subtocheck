@@ -158,7 +158,7 @@ func emailResults(email emailConfig, pIssues processedIssues) (err error) {
 
 	if len(pIssues.potVulns) > 0 {
 		for _, vuln := range pIssues.potVulns {
-			body += "<tr><td width=\"300\"><font face=\"Courier New, Courier, monospace\">" + vuln.url + "</font></td></tr>"
+			body += "<tr><td width=\"300\"><font face=\"Courier New, Courier, monospace\">" + vuln.url + " (" + vuln.platform + ")</font></td></tr>"
 		}
 	} else {
 		body += "<tr><td width=\"300\"><font face=\"Courier New, Courier, monospace\">none found</font></td></tr>"

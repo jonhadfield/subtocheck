@@ -40,10 +40,11 @@ var (
 )
 
 type issue struct {
-	kind string // vuln, request, dns
-	fqdn string
-	url  string
-	err  error
+	kind     string // vuln, request, dns
+	platform string
+	fqdn     string
+	url      string
+	err      error
 }
 
 type issues []issue
@@ -164,9 +165,10 @@ func checkVulnerable(url string, response *http.Response) (vuln issue) {
 		}
 		if checkBodyResponse(pattern, response.Body) {
 			return issue{
-				url:  url,
-				kind: "vuln",
-				err:  errors.Errorf("matches pattern for platform: %s", pattern.platform),
+				url:      url,
+				kind:     "vuln",
+				platform: pattern.platform,
+				err:      errors.Errorf("matches pattern for platform: %s", pattern.platform),
 			}
 		}
 	}
