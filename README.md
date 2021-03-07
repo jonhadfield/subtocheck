@@ -20,7 +20,7 @@ Only tested on Linux and MacOS, but should work on others.
 
 ## <a name="what-is-a-subdomain-takeover"></a>what is a subdomain takeover?
 
-If you host a service on certain hosting providers, e.g. AWS CloudFront and Heroku, point a DNS record to the provider and then delete your service from that provider (but leave your DNS pointing at the provider), it is possible for someone else to create a new service on that provider that responds to requests for your domain.
+If you host a service on certain hosting providers, e.g. AWS S3 and Heroku, point a DNS record to the provider and then delete your service from that provider (but leave your DNS pointing at the provider), it is possible for someone else to create a new service on that provider that responds to requests for your domain.
 This is possible because a number of providers do not ask you to prove you own the domain before hosting your content. In other words, if you move out, someone else can move in and take advantage of your own domain still pointing to the provider.
 The onus is on the customer to ensure their DNS only resolves to the provider whilst that service is live.
 
@@ -41,7 +41,6 @@ If the response (over http and/or https) can be retrieved, then check the built-
 
 - AWS CloudFront
 - Heroku
-- AWS S3
 - Tumblr
 
 ## <a name="install-and-run"></a>install and run

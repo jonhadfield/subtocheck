@@ -111,8 +111,10 @@ func checkResponse(fqdn string, protocols []string, debug *bool) (issues issues)
 		httpResp, err = client.Get(httpURL)
 		if err != nil {
 			issues = append(issues, issue{kind: "request", fqdn: fqdn, err: err})
+			continue
 		}
-		if httpResp != nil {
+
+		if httpResp != nil && httpResp.Body != nil {
 			vulnIssue := checkVulnerable(httpURL, httpResp)
 			if vulnIssue.kind != "" {
 				issues = append(issues, vulnIssue)
@@ -131,27 +133,26 @@ type vPattern struct {
 
 var vPatterns = []vPattern{
 	{
-		platform:        "CloudFront",
-		responseCodes:   []int{403},
-		bodyStrings:     []string{"The request could not be satisfied."},
+		platform:        "Bitbucket",
+		bodyStrings:     []string{"Repository not found"},
 		bodyStringMatch: "all",
 	},
 	{
 		platform:        "Heroku",
 		responseCodes:   []int{404},
-		bodyStrings:     []string{"//www.herokucdn.com/error-pages/no-such-app.html"},
-		bodyStringMatch: "all",
+		bodyStrings:     []string{"//www.herokucdn.com/error-pages/no-such-app.html", "No such app"},
+		bodyStringMatch: "any",
 	},
 	{
 		platform:        "S3",
 		responseCodes:   []int{404},
-		bodyStrings:     []string{"Code: NoSuchBucket"},
-		bodyStringMatch: "all",
+		bodyStrings:     []string{"Code: NoSuchBucket", "The specified bucket does not exist"},
+		bodyStringMatch: "any",
 	},
 	{
 		platform:        "Tumblr",
 		responseCodes:   []int{404},
-		bodyStrings:     []string{"Not found.", "assets.tumblr.com"},
+		bodyStrings:     []string{"Not found.", "assets.tumblr.com", "Whatever you were looking for doesn't currently exist at this address"},
 		bodyStringMatch: "all",
 	},
 }
@@ -239,15 +240,33 @@ func CheckDomains(path string, configPath *string, debug *bool, quiet *bool) {
 		<-results
 	}
 	pIssues := getIssuesSummary(domainIssues)
+	var noIssuesFound, noVulnsFound bool
+
 	if !*quiet {
 		fmt.Printf("%s", padToWidth(" ", false))
 		if !reflect.DeepEqual(pIssues, processedIssues{}) {
 			displayIssues(pIssues)
+			if len(pIssues.potVulns) == 0 {
+				noVulnsFound = true
+			}
 		} else {
+			noIssuesFound = true
 			fmt.Println("\nno issues found.")
 		}
 	}
 	// send notifications
+	if noIssuesFound {
+		if *debug {
+			fmt.Println("\nDEBUG: no issues found. skipping email.")
+		}
+		return
+	}
+	if noVulnsFound {
+		if *debug {
+			fmt.Println("\nDEBUG: no vulnerabilities found. skipping email.")
+		}
+		return
+	}
 	if conf.Email.Provider != "" {
 		if *debug {
 			fmt.Println("\nDEBUG: sending email")

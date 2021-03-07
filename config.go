@@ -28,6 +28,7 @@ type emailConfig struct {
 	Source             string
 	Subject            string
 	Recipients         []string
+	SkipNoVulns        bool `yaml:"skip_no_vulns"`
 }
 
 func parseConfigFileContent(content []byte) (config config, err error) {
