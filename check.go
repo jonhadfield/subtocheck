@@ -76,7 +76,7 @@ func checkResolves(fqdn string, debug *bool) (issues issues) {
 			nameservers[ns])
 		issues = append(issues, issue{kind: "dns", fqdn: fqdn, err: err})
 	}
-	if *debug {
+	if *debug && err != nil {
 		fmt.Printf("DEBUG: error: %v\n", err)
 	}
 
