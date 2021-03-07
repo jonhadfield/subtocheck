@@ -261,7 +261,7 @@ func CheckDomains(path string, configPath *string, debug *bool, quiet *bool) {
 		}
 		return
 	}
-	if noVulnsFound {
+	if conf.Email.SkipNoVulns && noVulnsFound {
 		if *debug {
 			fmt.Println("\nDEBUG: no vulnerabilities found. skipping email.")
 		}
