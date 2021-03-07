@@ -76,6 +76,9 @@ release: build-all bintray wait-for-publish build-docker release-docker
 wait-for-publish:
 	sleep 120
 
+find-updates:
+	go list -u -m -json all | go-mod-outdated -update -direct
+
 build-docker:
 	cd docker ; docker build --no-cache -t quay.io/jonhadfield/subtocheck:$(BUILD_TAG) .
 	cd docker ; docker tag quay.io/jonhadfield/subtocheck:$(BUILD_TAG) quay.io/jonhadfield/subtocheck:latest
