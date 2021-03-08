@@ -133,6 +133,13 @@ type vPattern struct {
 
 var vPatterns = []vPattern{
 	{
+		platform: "Azure Front Door",
+		// <h2>Our services aren't available right now</h2><p>We're working to restore all services as soon as possible. Please check back soon.</p>
+		responseCodes:   []int{400},
+		bodyStrings:     []string{"Our services aren't available right now"},
+		bodyStringMatch: "all",
+	},
+	{
 		platform:        "Bitbucket",
 		bodyStrings:     []string{"Repository not found"},
 		bodyStringMatch: "all",
