@@ -20,8 +20,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/alecthomas/kingpin/v2"
 	"github.com/pkg/errors"
-	"gopkg.in/alecthomas/kingpin.v2"
 
 	"github.com/jonhadfield/subtocheck"
 )

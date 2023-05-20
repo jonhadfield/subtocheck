@@ -10,6 +10,9 @@ setup:
 	go get -u golang.org/x/tools/cmd/cover
 	gometalinter --install --update
 
+find-updates:
+	go list -u -m -json all | go-mod-outdated -update
+
 test:
 	gotestcover $(TEST_OPTIONS) -covermode=atomic -coverprofile=coverage.txt $(SOURCE_FILES) -run $(TEST_PATTERN) -timeout=30s
 
@@ -75,9 +78,6 @@ release: build-all bintray wait-for-publish build-docker release-docker
 
 wait-for-publish:
 	sleep 120
-
-find-updates:
-	go list -u -m -json all | go-mod-outdated -update -direct
 
 build-docker:
 	cd docker ; docker build --no-cache -t quay.io/jonhadfield/subtocheck:$(BUILD_TAG) .
