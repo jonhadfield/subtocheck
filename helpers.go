@@ -7,6 +7,15 @@ import (
 	"golang.org/x/term"
 )
 
+// terminalWidth returns the width of the terminal on stdin, or 80 if there is none.
+func terminalWidth() int {
+	width, _, err := term.GetSize(0)
+	if err != nil || width <= 0 {
+		return 80
+	}
+	return width
+}
+
 func padToWidth(input string, trimToWidth bool) (output string) {
 	// Split string into lines
 	var lines []string
@@ -18,10 +27,7 @@ func padToWidth(input string, trimToWidth bool) (output string) {
 	}
 	var paddingSize int
 	for i, line := range lines {
-		width, _, _ := term.GetSize(0)
-		if width == -1 {
-			width = 80
-		}
+		width := terminalWidth()
 		// No padding for a line that already meets or exceeds console width
 		length := len(line)
 
