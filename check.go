@@ -238,7 +238,7 @@ func CheckDomains(path string, configPath *string, debug *bool, quiet *bool) {
 			progress = padToWidth(progress, true)
 			width, _, _ := term.GetSize(0)
 			if len(progress) == width {
-				fmt.Printf(progress[0:width-3] + "   \r")
+				fmt.Print(progress[0:width-3] + "   \r")
 			} else {
 				fmt.Print(progress)
 			}
