@@ -1,0 +1,145 @@
+name: goreleaser
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    name: GoReleaser
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0  # goreleaser needs the full history for the changelog
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+
+      - name: GoReleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: '~> v2'
+          args: release --clean -f goreleaser.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # the default token cannot write to the separate tap repository
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          # macOS signing and notarization. Absent secrets resolve to empty
+          # strings, which disables the notarize step rather than failing it.
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+
+  # A signed, notarized and STAPLED installer. The binaries above are signed
+  # and notarized, but a notarization ticket cannot be stapled into a bare
+  # Mach-O executable, so Gatekeeper has no offline proof and rejects a
+  # directly downloaded binary. A .pkg can be stapled, and files it installs
+  # are never quarantined, so the installed binary runs with no Gatekeeper
+  # check at all.
+  #
+  # Needs a macOS runner: pkgbuild and stapler are macOS-only. Free for public
+  # repositories. Skips itself when the installer certificate is absent, so the
+  # rest of the release is unaffected until the secrets are set.
+  installer:
+    runs-on: macos-latest
+    name: macOS Installer Package
+    needs: goreleaser
+    permissions:
+      contents: write
+    steps:
+      - name: Build, sign, notarize and staple the installer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          MACOS_INSTALLER_P12: ${{ secrets.MACOS_INSTALLER_P12 }}
+          MACOS_INSTALLER_PASSWORD: ${{ secrets.MACOS_INSTALLER_PASSWORD }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$MACOS_INSTALLER_P12" ] || [ -z "$MACOS_NOTARY_KEY" ]; then
+            echo "::notice::MACOS_INSTALLER_P12 or MACOS_NOTARY_KEY not set - skipping the installer package."
+            exit 0
+          fi
+
+          # Tags here are not reliably v-prefixed, so strip it only if present.
+          VERSION="${TAG#v}"
+          WORK="$RUNNER_TEMP/pkg"
+          mkdir -p "$WORK/payload/usr/local/bin"
+
+          # Reuse the binaries goreleaser already signed and notarized, rather
+          # than rebuilding unsigned ones. lipo joins them into one universal
+          # binary so a single package covers both architectures.
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'subtocheck_darwin_*.tar.gz' --dir "$WORK"
+          tar xzf "$WORK/subtocheck_darwin_arm64.tar.gz" -C "$WORK" subtocheck
+          mv "$WORK/subtocheck" "$WORK/subtocheck.arm64"
+          tar xzf "$WORK/subtocheck_darwin_amd64.tar.gz" -C "$WORK" subtocheck
+          mv "$WORK/subtocheck" "$WORK/subtocheck.amd64"
+          lipo -create "$WORK/subtocheck.arm64" "$WORK/subtocheck.amd64" -output "$WORK/payload/usr/local/bin/subtocheck"
+          chmod 755 "$WORK/payload/usr/local/bin/subtocheck"
+
+          KEYCHAIN="$RUNNER_TEMP/installer.keychain-db"
+          KEYCHAIN_PASS="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+
+          printf %s "$MACOS_INSTALLER_P12" | base64 -d > "$WORK/installer.p12"
+          security import "$WORK/installer.p12" -k "$KEYCHAIN" -P "$MACOS_INSTALLER_PASSWORD" -T /usr/bin/pkgbuild -T /usr/bin/productbuild -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN" > /dev/null
+          rm -f "$WORK/installer.p12"
+
+          INSTALLER_ID="$(security find-identity -v -p basic "$KEYCHAIN" | grep 'Developer ID Installer' | head -1 | sed 's/.*"\(.*\)"/\1/')"
+          if [ -z "$INSTALLER_ID" ]; then
+            echo "::error::No 'Developer ID Installer' identity in MACOS_INSTALLER_P12. That is a different certificate type from 'Developer ID Application'."
+            exit 1
+          fi
+          echo "Signing with: $INSTALLER_ID"
+
+          pkgbuild --root "$WORK/payload" --install-location / --identifier uk.co.lessknown.subtocheck --version "$VERSION" --sign "$INSTALLER_ID" "$WORK/subtocheck.pkg"
+
+          printf %s "$MACOS_NOTARY_KEY" | base64 -d > "$WORK/notary.p8"
+          xcrun notarytool submit "$WORK/subtocheck.pkg" --key "$WORK/notary.p8" --key-id "$MACOS_NOTARY_KEY_ID" --issuer "$MACOS_NOTARY_ISSUER_ID" --wait --timeout 20m
+          rm -f "$WORK/notary.p8"
+
+          xcrun stapler staple "$WORK/subtocheck.pkg"
+
+          # Prove the ticket is attached and Gatekeeper accepts it. Unlike the
+          # bare binaries, this must pass offline.
+          xcrun stapler validate "$WORK/subtocheck.pkg"
+          spctl -a -vvv -t install "$WORK/subtocheck.pkg"
+
+          PKG="$WORK/subtocheck_macos.pkg"
+          mv "$WORK/subtocheck.pkg" "$PKG"
+          gh release upload "$TAG" "$PKG" --repo "$GITHUB_REPOSITORY" --clobber
+
+          # Verify what GitHub actually serves, not just what we built. The
+          # checks above ran on a local file; these run on a fresh download, so
+          # a truncated or mangled upload cannot ship looking healthy.
+          VERIFY="$WORK/verify"
+          mkdir -p "$VERIFY"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.pkg' --dir "$VERIFY" --clobber
+
+          BUILT_SHA="$(shasum -a 256 "$PKG" | awk '{print $1}')"
+          PUBLISHED_SHA="$(shasum -a 256 "$VERIFY/subtocheck_macos.pkg" | awk '{print $1}')"
+          if [ "$BUILT_SHA" != "$PUBLISHED_SHA" ]; then
+            echo "::error::Published installer differs from the one built and stapled here. built=$BUILT_SHA published=$PUBLISHED_SHA"
+            exit 1
+          fi
+          echo "Published sha256 matches the stapled build: $PUBLISHED_SHA"
+
+          xcrun stapler validate "$VERIFY/subtocheck_macos.pkg"
+          spctl -a -vvv -t install "$VERIFY/subtocheck_macos.pkg"
+          echo "Published installer verified: ticket stapled and accepted by Gatekeeper."

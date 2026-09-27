@@ -6,7 +6,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
@@ -58,8 +58,7 @@ func checkResolves(fqdn string, debug *bool) (issues issues) {
 	var record *dns.Msg
 	var err error
 	resolveMutex.Lock()
-	rand.Seed(time.Now().UnixNano())
-	ns := rand.Int() % len(nameservers)
+	ns := rand.IntN(len(nameservers))
 	if *debug {
 		fmt.Printf("DEBUG: resolving \"%s\" with nameserver %s\n", fqdn, nameservers[ns])
 	}
@@ -97,9 +96,10 @@ func checkResponse(fqdn string, protocols []string, debug *bool) (issues issues)
 	}
 	for _, protocol := range protocols {
 		var httpURL string
-		if protocol == "http" {
+		switch protocol {
+		case "http":
 			httpURL = httpPrefix + fqdn
-		} else if protocol == "https" {
+		case "https":
 			httpURL = httpsPrefix + fqdn
 		}
 		var httpResp *http.Response
