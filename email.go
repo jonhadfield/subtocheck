@@ -81,16 +81,9 @@ func generateDNSIssueList(dnsIssues []issue) (filePath string) {
 	for _, dnsIssue := range dnsIssues {
 		buffer.WriteString(dnsIssue.fqdn + " - " + dnsIssue.err.Error() + "\n")
 	}
-	f, createFileErr := os.Create(filePath)
-	if createFileErr != nil {
-		panic(createFileErr)
-	}
-	defer f.Close()
-	_, writeErr := f.Write(buffer.Bytes())
-	if writeErr != nil {
+	if writeErr := os.WriteFile(filePath, buffer.Bytes(), 0o644); writeErr != nil {
 		panic(writeErr)
 	}
-	f.Sync()
 	return
 }
 
@@ -102,16 +95,9 @@ func generateRequestIssueList(requestIssues []issue) (filePath string) {
 	for _, requestIssue := range requestIssues {
 		buffer.WriteString(requestIssue.url + " - " + requestIssue.err.Error() + "\n")
 	}
-	f, createFileErr := os.Create(filePath)
-	if createFileErr != nil {
-		panic(createFileErr)
-	}
-	defer f.Close()
-	_, writeErr := f.Write(buffer.Bytes())
-	if writeErr != nil {
+	if writeErr := os.WriteFile(filePath, buffer.Bytes(), 0o644); writeErr != nil {
 		panic(writeErr)
 	}
-	f.Sync()
 	return
 }
 
@@ -225,7 +211,7 @@ func emailResults(email emailConfig, pIssues processedIssues) (err error) {
 		msg.SetHeader("To", email.Recipients...)
 		host := email.Host
 		port, _ := strconv.Atoi(email.Port)
-		dialer := gomail.NewPlainDialer(host, port, email.Username, email.Password)
+		dialer := gomail.NewDialer(host, port, email.Username, email.Password)
 		tlsConfig := &tls.Config{
 			InsecureSkipVerify: false,
 			ServerName:         host,

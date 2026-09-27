@@ -2,7 +2,6 @@ package subtocheck
 
 import (
 	"fmt"
-	"io/ioutil"
 
 	"os"
 
@@ -43,7 +42,7 @@ func parseConfigFileContent(content []byte) (config config, err error) {
 func readConfig(path string) (config config) {
 	var configFileContent []byte
 	var err error
-	configFileContent, err = ioutil.ReadFile(path)
+	configFileContent, err = os.ReadFile(path)
 	if err != nil {
 		fmt.Printf("failed to read: \"%s\"\n", path)
 		fmt.Println(" -- error --")

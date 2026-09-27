@@ -1,6 +1,6 @@
 
 # subtocheck: Subdomain Takeover Checker
-[![CircleCI](https://circleci.com/gh/jonhadfield/ape/tree/master.svg?style=shield&circle-token=16e5cf0096cd4f6c7894e10f25b51e07746fa0b7)](https://circleci.com/gh/jonhadfield/ape/tree/master)
+[![test](https://github.com/jonhadfield/subtocheck/actions/workflows/test.yml/badge.svg)](https://github.com/jonhadfield/subtocheck/actions/workflows/test.yml)
 
 - [about](#about)
 - [compatibility](#compatibility)
@@ -45,11 +45,43 @@ If the response (over http and/or https) can be retrieved, then check the built-
 
 ## <a name="install-and-run"></a>install and run
 
-Download the latest release here: https://github.com/jonhadfield/subtocheck/releases and install:
+On macOS and linux, using [homebrew](https://brew.sh):
 
-``
-$ install <subtocheck binary> /usr/local/bin/subtocheck
-``
+```bash
+brew install jonhadfield/tap/subtocheck
+```
+
+On macOS you can also use the signed installer:
+
+```bash
+curl -fsSL https://github.com/jonhadfield/subtocheck/releases/latest/download/subtocheck_macos.pkg -o /tmp/subtocheck.pkg && sudo installer -pkg /tmp/subtocheck.pkg -target /
+```
+
+That puts `subtocheck` in `/usr/local/bin`. The package is notarized with a
+stapled ticket, so it installs with no Gatekeeper warning.
+
+On linux, install the latest release for your architecture:
+
+```bash
+curl -fsSL "https://github.com/jonhadfield/subtocheck/releases/latest/download/subtocheck_linux_$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/').tar.gz" | sudo tar -xz -C /usr/local/bin subtocheck
+```
+
+Otherwise, download the latest release [here](https://github.com/jonhadfield/subtocheck/releases) and then install:
+
+```bash
+install <subtocheck binary> /usr/local/bin/subtocheck
+```
+_use: `sudo install` if on linux_
+
+On macOS, a binary downloaded through a browser is quarantined, and Gatekeeper
+will refuse to run it. Homebrew and the `.pkg` above both handle this; if you
+took a tarball instead, clear the flag manually:
+
+```bash
+xattr -d com.apple.quarantine /usr/local/bin/subtocheck
+```
+
+### run
 
 Add your list of domains to a file called 'domains.txt' (you can override with --domains option)
 

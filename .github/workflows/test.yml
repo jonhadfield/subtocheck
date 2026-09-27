@@ -1,0 +1,41 @@
+name: test
+on:
+  push:
+    tags:
+      - '*'
+    branches:
+      - master
+  pull_request:
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test -race -covermode=atomic -coverprofile=coverage.txt -timeout=600s ./...
+      - name: coverage
+        run: go tool cover -func=coverage.txt | tail -1
+
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # go-version-input must be set explicitly: it defaults to "stable", and
+      # setup-go prefers it over go-version-file, so the scan would otherwise
+      # run against the newest Go rather than the release line this module
+      # ships. Standard library findings depend on that version, so a pinned
+      # but vulnerable toolchain would pass unnoticed.
+      - name: govulncheck
+        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1
+        with:
+          go-version-input: '1.27.1'
+          go-package: ./...

@@ -1,0 +1,120 @@
+version: 2
+
+project_name: subtocheck
+
+env:
+  - GOPROXY=https://proxy.golang.org
+  - CGO_ENABLED=0
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: subtocheck
+    main: ./cmd/subtocheck/
+    binary: subtocheck
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+      - freebsd
+      - netbsd
+      - openbsd
+    goarch:
+      - amd64
+      - arm
+      - arm64
+    ignore:
+      # 32 bit arm is not a darwin or windows target
+      - goos: darwin
+        goarch: arm
+      - goos: windows
+        goarch: arm
+    flags:
+      - -trimpath
+    ldflags:
+      - "-s -w -X main.version={{ .Version }} -X main.sha={{ .ShortCommit }} -X main.buildDate={{ .Date }} -X main.tag={{ .Tag }}"
+
+# Sign and notarize the darwin binaries so macOS Gatekeeper does not warn on
+# first run. Uses goreleaser's cross-platform (quill) implementation, which
+# needs no macOS runner. Both the certificate and the notary key are required,
+# so a half-configured state stays disabled rather than failing the release.
+notarize:
+  macos:
+    - enabled: '{{ and (isEnvSet "MACOS_SIGN_P12") (isEnvSet "MACOS_NOTARY_KEY") }}'
+      ids:
+        - subtocheck
+      sign:
+        certificate: "{{ .Env.MACOS_SIGN_P12 }}"
+        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
+      notarize:
+        issuer_id: "{{ .Env.MACOS_NOTARY_ISSUER_ID }}"
+        key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"
+        key: "{{ .Env.MACOS_NOTARY_KEY }}"
+        wait: true
+        timeout: 20m
+
+archives:
+  # The name carries no version, so releases/latest/download/<name> always
+  # resolves to the newest release for the curl install in the README.
+  - name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    ids:
+      - subtocheck
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - none*
+
+homebrew_casks:
+  - name: subtocheck
+    binaries: [subtocheck]
+    repository:
+      owner: jonhadfield
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    # the default token cannot write to the tap, so skip rather than fail
+    # the whole release until TAP_GITHUB_TOKEN is set on this repository
+    skip_upload: '{{ if isEnvSet "TAP_GITHUB_TOKEN" }}false{{ else }}true{{ end }}'
+    homepage: https://github.com/jonhadfield/subtocheck
+    description: Check FQDNs for subdomain takeover vulnerabilities
+    # The darwin binaries are signed and notarized, but a notarization ticket
+    # cannot be stapled into a bare Mach-O executable, so clear the quarantine
+    # flag that casks set on download. Injected through custom_block because
+    # goreleaser's hooks emit the postflight block Homebrew 7 deprecates.
+    custom_block: |
+      # staged_path is a Homebrew template token, escaped to survive
+      # goreleaser's own templating.
+      postflight_steps do
+        run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ `{{staged_path}}` }}/subtocheck"], must_succeed: false
+      end
+
+release:
+  github:
+    owner: jonhadfield
+    name: subtocheck
+  prerelease: auto
+  name_template: '{{ .Tag }}'
+
+announce:
+  skip: true
+
+snapshot:
+  version_template: "{{ .Tag }}-devel"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - README
+      - test
+      - ignore
+
+checksum:
+  name_template: 'checksums.txt'
