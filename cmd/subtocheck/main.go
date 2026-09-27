@@ -102,11 +102,9 @@ func main() {
 		fmt.Println("warning: running without console output and without email config ¯\\_(ツ)_/¯")
 	}
 
-	var domainsPath string
 	domainsPath, err := getDomainListFilePath(*domainListPath)
 	if err != nil {
-		panic(err)
-	} else {
-		subtocheck.CheckDomains(domainsPath, configPath, debug, quiet)
+		kingpin.Fatalf("%v: create it with one domain per line, or set its path with --domains", err)
 	}
+	subtocheck.CheckDomains(domainsPath, configPath, debug, quiet)
 }
