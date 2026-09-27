@@ -5,20 +5,19 @@ version: 2
 jobs:
   build:
     docker:
-      - image: cimg/go:1.20.0
-    working_directory: /go/src/github.com/jonhadfield/subtocheck
+      - image: cimg/go:1.27.1
     steps:
       - checkout
-      - run: go get -v -t -d ./...
+      - run: go mod download
+      - run: go vet ./...
       - run: go test -v ./...
   release:
     docker:
-      - image: circleci/golang:1.9
-    working_directory: /go/src/github.com/jonhadfield/subtocheck
+      - image: cimg/go:1.27.1
     steps:
       - checkout
-      - run: go get github.com/tcnksm/ghr
-      - run: go get github.com/mitchellh/gox
+      - run: go install github.com/tcnksm/ghr@latest
+      - run: go install github.com/mitchellh/gox@latest
       - run: mkdir dist
       - run: echo "export BUILD_TAG=$(git describe --tags)" >> $BASH_ENV
       - run: echo "export BUILD_SHA=$(git rev-parse --short HEAD)" >> $BASH_ENV
