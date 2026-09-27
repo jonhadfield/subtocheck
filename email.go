@@ -2,6 +2,7 @@ package subtocheck
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -13,10 +14,11 @@ import (
 
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/ses"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/ses"
+	"github.com/aws/aws-sdk-go-v2/service/ses/types"
 	"github.com/pkg/errors"
 	"gopkg.in/gomail.v2"
 )
@@ -189,43 +191,33 @@ func emailResults(email emailConfig, pIssues processedIssues) (err error) {
 
 	switch email.Provider {
 	case "ses":
-		var sess *session.Session
-		var staticCreds *credentials.Credentials
-		if email.Provider == "ses" {
-			if email.AWSAccessKeyID != "" && email.AWSSecretAccessKey != "" && email.AWSSessionToken != "" {
-				// try getting with id, secret, and session
-				staticCreds = credentials.NewStaticCredentials(email.AWSAccessKeyID,
-					email.AWSSecretAccessKey, email.AWSSessionToken)
-				sess, err = session.NewSession(&aws.Config{Credentials: staticCreds})
-			} else if email.AWSAccessKeyID != "" && email.AWSSecretAccessKey != "" {
-				//try with id and secret only
-				staticCreds = credentials.NewStaticCredentials(email.AWSAccessKeyID,
-					email.AWSSecretAccessKey, "")
-				sess, err = session.NewSession(&aws.Config{Credentials: staticCreds})
-			} else {
-				// try discovering credentials
-				sess, err = session.NewSession()
-			}
-			if err != nil {
-				fmt.Println(err)
-				os.Exit(1)
-			}
-			err = validateEmailSettings(email)
-			if err != nil {
-				fmt.Println(err)
-				return
-			}
+		opts := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(email.Region)}
+		if email.AWSAccessKeyID != "" && email.AWSSecretAccessKey != "" {
+			// use static credentials, with session token if provided
+			opts = append(opts, awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
+				email.AWSAccessKeyID, email.AWSSecretAccessKey, email.AWSSessionToken)))
+		}
+		// otherwise credentials are discovered from the environment
+		ctx := context.Background()
+		var cfg aws.Config
+		cfg, err = awsconfig.LoadDefaultConfig(ctx, opts...)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		err = validateEmailSettings(email)
+		if err != nil {
+			fmt.Println(err)
+			return
 		}
 		msg.SetHeader("To", strings.Join(email.Recipients, ","))
-		svc := ses.New(sess, &aws.Config{Region: PtrToStr(email.Region)})
-		message := ses.RawMessage{Data: emailRaw.Bytes()}
-		source := aws.String(email.Source)
-		var destinations []*string
-		for _, dest := range email.Recipients {
-			destinations = append(destinations, PtrToStr(dest))
+		svc := ses.NewFromConfig(cfg)
+		input := ses.SendRawEmailInput{
+			Source:       aws.String(email.Source),
+			Destinations: email.Recipients,
+			RawMessage:   &types.RawMessage{Data: emailRaw.Bytes()},
 		}
-		input := ses.SendRawEmailInput{Source: source, Destinations: destinations, RawMessage: &message}
-		_, err = svc.SendRawEmail(&input)
+		_, err = svc.SendRawEmail(ctx, &input)
 		if err != nil {
 			panic(err)
 		}
