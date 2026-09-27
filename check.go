@@ -19,7 +19,7 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/pkg/errors"
-	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 )
 
 var (
@@ -236,7 +236,7 @@ func CheckDomains(path string, configPath *string, debug *bool, quiet *bool) {
 		if !*quiet {
 			progress = fmt.Sprintf("Processing... %d/%d %s", a, numDomains, domains[a-1])
 			progress = padToWidth(progress, true)
-			width, _, _ := terminal.GetSize(0)
+			width, _, _ := term.GetSize(0)
 			if len(progress) == width {
 				fmt.Printf(progress[0:width-3] + "   \r")
 			} else {
