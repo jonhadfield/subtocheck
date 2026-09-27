@@ -2,7 +2,6 @@ package subtocheck
 
 import (
 	"bufio"
-	"bytes"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -19,7 +18,6 @@ import (
 
 	"github.com/miekg/dns"
 	"github.com/pkg/errors"
-	"golang.org/x/term"
 )
 
 var (
@@ -49,7 +47,9 @@ type issue struct {
 
 type issues []issue
 
-func checkResolves(fqdn string, debug *bool) (issues issues) {
+// checkResolves resolves the fqdn and returns any DNS issues along with the CNAME
+// targets followed, so later checks can tell which provider serves the name.
+func checkResolves(fqdn string, debug *bool) (issues issues, cnames []string) {
 	c := new(dns.Client)
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(fqdn), dns.TypeA)
@@ -64,9 +64,16 @@ func checkResolves(fqdn string, debug *bool) (issues issues) {
 	}
 	record, _, err = c.Exchange(m, net.JoinHostPort(nameservers[ns], strconv.Itoa(53)))
 	resolveMutex.Unlock()
+	if err == nil {
+		cnames = cnameTargets(record)
+	}
 	if err != nil {
 		err = errors.Errorf("%s could not be resolved (%v)", fqdn, err)
 		issues = append(issues, issue{kind: "dns", fqdn: fqdn, err: err})
+	} else if record.Rcode == dns.RcodeNameError && len(cnames) > 0 {
+		// the name exists but the CNAME points at a name that does not
+		issues = append(issues, danglingCNAMEIssue(fqdn, cnames[len(cnames)-1]))
+		err = issues[len(issues)-1].err
 	} else if len(record.Answer) == 0 {
 		err = errors.Errorf("%s could not be resolved (no answer from %s)", fqdn, nameservers[ns])
 		issues = append(issues, issue{kind: "dns", fqdn: fqdn, err: err})
@@ -82,7 +89,48 @@ func checkResolves(fqdn string, debug *bool) (issues issues) {
 	return
 }
 
-func checkResponse(fqdn string, protocols []string, debug *bool) (issues issues) {
+// cnameTargets returns the target of each CNAME in the answer, in the order followed.
+func cnameTargets(record *dns.Msg) (targets []string) {
+	for _, rr := range record.Answer {
+		if cname, ok := rr.(*dns.CNAME); ok {
+			targets = append(targets, strings.ToLower(strings.TrimSuffix(cname.Target, ".")))
+		}
+	}
+	return
+}
+
+// danglingCNAMEIssue reports a CNAME whose target does not exist. If the target belongs to
+// a provider where deleted names can be registered again, it is a potential vulnerability.
+func danglingCNAMEIssue(fqdn, target string) issue {
+	for _, pattern := range cnamePatterns {
+		if hasSuffix(target, pattern.suffixes) {
+			return issue{
+				kind:     "vuln",
+				platform: pattern.platform,
+				fqdn:     fqdn,
+				url:      fqdn,
+				err:      errors.Errorf("CNAME to %s, which does not exist, matches platform: %s", target, pattern.platform),
+			}
+		}
+	}
+	return issue{
+		kind: "dns",
+		fqdn: fqdn,
+		err:  errors.Errorf("%s is a dangling CNAME: target %s does not exist", fqdn, target),
+	}
+}
+
+// hasSuffix reports whether host is, or is a subdomain of, any of the domains.
+func hasSuffix(host string, domains []string) bool {
+	for _, domain := range domains {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return true
+		}
+	}
+	return false
+}
+
+func checkResponse(fqdn string, cnames []string, protocols []string, debug *bool) (issues issues) {
 	var clientTransportTimeoutSecs = 3
 	var responseHeaderTimeoutSecs = 2
 
@@ -90,11 +138,20 @@ func checkResponse(fqdn string, protocols []string, debug *bool) (issues issues)
 		ResponseHeaderTimeout: time.Duration(responseHeaderTimeoutSecs) * time.Second,
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
 	}
-	client := &http.Client{
-		Transport: tr,
-		Timeout:   time.Duration(clientTransportTimeoutSecs) * time.Second,
-	}
 	for _, protocol := range protocols {
+		// record redirect locations, as some providers only identify themselves in those
+		var redirects []string
+		client := &http.Client{
+			Transport: tr,
+			Timeout:   time.Duration(clientTransportTimeoutSecs) * time.Second,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 10 {
+					return errors.New("stopped after 10 redirects")
+				}
+				redirects = append(redirects, req.URL.String())
+				return nil
+			},
+		}
 		var httpURL string
 		switch protocol {
 		case "http":
@@ -110,99 +167,132 @@ func checkResponse(fqdn string, protocols []string, debug *bool) (issues issues)
 		}
 		httpResp, err = client.Get(httpURL)
 		if err != nil {
-			issues = append(issues, issue{kind: "request", fqdn: fqdn, err: err})
+			issues = append(issues, issue{kind: "request", fqdn: fqdn, url: httpURL, err: err})
 			continue
 		}
 
-		if httpResp != nil && httpResp.Body != nil {
-			vulnIssue := checkVulnerable(httpURL, httpResp)
-			if vulnIssue.kind != "" {
-				issues = append(issues, vulnIssue)
-			}
+		vulnIssue := checkVulnerable(httpURL, httpResp, cnames, redirects)
+		if vulnIssue.kind != "" {
+			vulnIssue.fqdn = fqdn
+			issues = append(issues, vulnIssue)
 		}
 	}
 	return
 }
 
-type vPattern struct {
-	platform        string
-	responseCodes   []int // 0 for all
-	bodyStrings     []string
-	bodyStringMatch string
-}
+// maxBodyBytes limits how much of a response is read for fingerprinting
+const maxBodyBytes = 1 << 20
 
-var vPatterns = []vPattern{
-	{
-		platform: "Azure Front Door",
-		// <h2>Our services aren't available right now</h2><p>We're working to restore all services as soon as possible. Please check back soon.</p>
-		responseCodes:   []int{400},
-		bodyStrings:     []string{"Our services aren't available right now"},
-		bodyStringMatch: "all",
-	},
-	{
-		platform:        "Bitbucket",
-		bodyStrings:     []string{"Repository not found"},
-		bodyStringMatch: "all",
-	},
-	{
-		platform:        "Heroku",
-		responseCodes:   []int{404},
-		bodyStrings:     []string{"//www.herokucdn.com/error-pages/no-such-app.html", "No such app"},
-		bodyStringMatch: "any",
-	},
-	{
-		platform:        "S3",
-		responseCodes:   []int{404},
-		bodyStrings:     []string{"Code: NoSuchBucket", "The specified bucket does not exist"},
-		bodyStringMatch: "any",
-	},
-	{
-		platform:        "Tumblr",
-		responseCodes:   []int{404},
-		bodyStrings:     []string{"Not found.", "assets.tumblr.com", "Whatever you were looking for doesn't currently exist at this address"},
-		bodyStringMatch: "all",
-	},
-}
+func checkVulnerable(url string, response *http.Response, cnames []string, redirects []string) (vuln issue) {
+	// read the body once: every pattern is checked against the same content
+	body, _ := io.ReadAll(io.LimitReader(response.Body, maxBodyBytes))
+	_ = response.Body.Close()
+	bodyText := string(body)
+	headerText := headersToLower(response.Header)
 
-func checkVulnerable(url string, response *http.Response) (vuln issue) {
 	for _, pattern := range vPatterns {
-		if len(pattern.responseCodes) > 0 {
-			if pattern.responseCodes == nil || !contains(pattern.responseCodes, response.StatusCode) {
-				continue
+		if matchesPattern(pattern, response.StatusCode, bodyText, headerText, cnames, redirects) {
+			msg := "matches pattern for platform: " + pattern.platform
+			if pattern.edgeCase {
+				msg += " (edge case: takeover depends on provider conditions, verify manually)"
 			}
-		}
-		if checkBodyResponse(pattern, response.Body) {
 			return issue{
 				url:      url,
 				kind:     "vuln",
 				platform: pattern.platform,
-				err:      errors.Errorf("matches pattern for platform: %s", pattern.platform),
+				err:      errors.New(msg),
 			}
 		}
 	}
 	return
 }
 
-func checkBodyResponse(pattern vPattern, body io.ReadCloser) (result bool) {
-	buf := new(bytes.Buffer)
-	_, err := buf.ReadFrom(body)
-	if err != nil {
-		fmt.Printf("%+v\n", err)
-		os.Exit(1)
+func matchesPattern(pattern vPattern, statusCode int, body, headers string, cnames, redirects []string) bool {
+	if len(pattern.cnames) > 0 && !anyHasSuffix(cnames, pattern.cnames) {
+		return false
 	}
-	bodyText := buf.String()
-	for _, bodyString := range pattern.bodyStrings {
-		if strings.Contains(bodyText, bodyString) {
-			result = true
-		} else if pattern.bodyStringMatch == "all" {
-			result = false
-			return
+	if len(pattern.responseCodes) > 0 && !contains(pattern.responseCodes, statusCode) {
+		return false
+	}
+	if len(pattern.redirectStrings) > 0 && !anyContains(redirects, pattern.redirectStrings) {
+		return false
+	}
+	for _, s := range pattern.headerStrings {
+		if !strings.Contains(headers, strings.ToLower(s)) {
+			return false
 		}
 	}
-	return
+	for _, s := range pattern.notHeaderStrings {
+		if strings.Contains(headers, strings.ToLower(s)) {
+			return false
+		}
+	}
+	for _, s := range pattern.notBodyStrings {
+		if strings.Contains(body, s) {
+			return false
+		}
+	}
+	if len(pattern.bodyStrings) > 0 && !checkBodyResponse(pattern, body) {
+		return false
+	}
+	// a pattern must match on something beyond DNS and status alone
+	return len(pattern.bodyStrings) > 0 || len(pattern.redirectStrings) > 0 || len(pattern.headerStrings) > 0
 }
 
-var domainIssues issues
+func checkBodyResponse(pattern vPattern, bodyText string) bool {
+	for _, bodyString := range pattern.bodyStrings {
+		found := strings.Contains(bodyText, bodyString)
+		if found && pattern.bodyStringMatch != "all" {
+			return true
+		}
+		if !found && pattern.bodyStringMatch == "all" {
+			return false
+		}
+	}
+	return pattern.bodyStringMatch == "all"
+}
+
+// headersToLower renders headers as lower case "name: value" lines for substring matching.
+func headersToLower(header http.Header) string {
+	var b strings.Builder
+	for name, values := range header {
+		for _, value := range values {
+			b.WriteString(strings.ToLower(name + ": " + value + "\n"))
+		}
+	}
+	return b.String()
+}
+
+func anyHasSuffix(hosts []string, domains []string) bool {
+	for _, host := range hosts {
+		if hasSuffix(host, domains) {
+			return true
+		}
+	}
+	return false
+}
+
+func anyContains(values []string, substrings []string) bool {
+	for _, value := range values {
+		for _, sub := range substrings {
+			if strings.Contains(value, sub) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+var (
+	domainIssues      issues
+	domainIssuesMutex sync.Mutex
+)
+
+func addIssues(i issues) {
+	domainIssuesMutex.Lock()
+	defer domainIssuesMutex.Unlock()
+	domainIssues = append(domainIssues, i...)
+}
 
 // CheckDomains is called from cmd/subtocheck/main.go to kick off the scans
 func CheckDomains(path string, configPath *string, debug *bool, quiet *bool) {
@@ -236,7 +326,7 @@ func CheckDomains(path string, configPath *string, debug *bool, quiet *bool) {
 		if !*quiet {
 			progress = fmt.Sprintf("Processing... %d/%d %s", a, numDomains, domains[a-1])
 			progress = padToWidth(progress, true)
-			width, _, _ := term.GetSize(0)
+			width := terminalWidth()
 			if len(progress) == width {
 				fmt.Print(progress[0:width-3] + "   \r")
 			} else {
@@ -292,14 +382,11 @@ func worker(id int, jobs <-chan string, results chan<- bool, debug *bool) {
 		if *debug {
 			fmt.Printf("DEBUG: worker: %d\n", id)
 		}
-		resolveIssues := checkResolves(j, debug)
+		resolveIssues, cnames := checkResolves(j, debug)
 		if len(resolveIssues) > 0 {
-			domainIssues = append(domainIssues, resolveIssues...)
+			addIssues(resolveIssues)
 		} else {
-			responseIssues := checkResponse(j, protocols, debug)
-			if len(responseIssues) > 0 {
-				domainIssues = append(domainIssues, responseIssues...)
-			}
+			addIssues(checkResponse(j, cnames, protocols, debug))
 		}
 		results <- true
 	}

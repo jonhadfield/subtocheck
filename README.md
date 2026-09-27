@@ -26,22 +26,45 @@ The onus is on the customer to ensure their DNS only resolves to the provider wh
 
 ## <a name="how-does-subtocheckwork"></a>how does subtocheck work?
 
-subtocheck performs three checks for each FQDN:
-- DNS resolution
+subtocheck performs these checks for each FQDN:
+- DNS resolution, following any CNAME records
 - A request to the root of the domain over http and https
 - Test each response against a provider that no longer has a service configured
 
-If the name cannot be resolved then the FQDN is not in public DNS and therefore it isn't vulnerable to a public subdomain takeover.
+If the name has a CNAME whose target does not exist (NXDOMAIN), the record is dangling. Where the target belongs to a provider that lets anyone register a deleted resource's name again, such as Azure App Service, that is reported as a potential vulnerability without any request being needed. Other dangling CNAMEs are reported as DNS issues, as the target domain itself may be available to register.
+
+Otherwise, if the name cannot be resolved then the FQDN is not in public DNS and therefore it isn't vulnerable to a public subdomain takeover.
 
 If the name can be resolved but responses cannot be retrieved over http nor https then it isn't vulnerable to a public subdomain takeover.
 
-If the response (over http and/or https) can be retrieved, then check the built-in signatures for a provider match. A provider match indicates someone may be able to host a service for your domain.
+If the response (over http and/or https) can be retrieved, then check the built-in signatures for a provider match. A provider match indicates someone may be able to host a service for your domain. subtocheck only detects; it never attempts to claim anything.
 
-#### checks are currently configured for providers:
+#### providers checked
 
-- AWS CloudFront
-- Heroku
-- Tumblr
+Providers and fingerprints are based on [can-i-take-over-xyz](https://github.com/EdOverflow/can-i-take-over-xyz), the [nuclei takeover templates](https://github.com/projectdiscovery/nuclei-templates/tree/main/http/takeovers) and Microsoft's [dangling DNS guidance](https://learn.microsoft.com/en-us/azure/security/fundamentals/subdomain-takeover). Fingerprints marked ✓ were confirmed against the live provider in September 2026.
+
+Dangling CNAME to:
+- AWS Elastic Beanstalk
+- Azure: App Service, Cloud Services, Public IP addresses, Traffic Manager, Blob Storage, CDN, Front Door, Container Instances, API Management
+- Discourse
+
+Response fingerprint:
+
+| | | |
+|---|---|---|
+| Agile CRM | Airee.ru | Anima |
+| Azure Front Door | Bitbucket | Campaign Monitor ✓ |
+| Canny ✓ | Cargo Collective | Gemfury |
+| GetResponse ✓ | Ghost ✓ | HatenaBlog |
+| Help Juice | Help Scout | Helprace |
+| JetBrains YouTrack | LaunchRock | Ngrok |
+| Pantheon | Pingdom ✓ | Readme.io |
+| Read the Docs | S3 ✓ | Short.io ✓ |
+| SmartJobBoard ✓ | SmugMug | Strikingly |
+| Surge.sh ✓ | SurveySparrow | Uberflip ✓ |
+| UptimeRobot | WordPress.com | Worksites |
+
+Edge cases, reported with a note to verify manually, as takeover depends on conditions such as the provider's domain verification: GitHub Pages ✓, Heroku ✓, Tilda ✓, Tumblr ✓, Wix.
 
 ## <a name="install-and-run"></a>install and run
 
