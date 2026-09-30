@@ -114,9 +114,28 @@ Add your list of domains to a file called 'domains.txt' (you can override with -
 
 Run subtocheck
 
-``
-$ subtocheck
-``
+```bash
+subtocheck
+```
+
+On a terminal, subtocheck shows a progress bar while it scans and prints each potential takeover in colour as soon as it is found:
+
+- `TAKEOVER` (red): the response or DNS matches a provider that lets anyone claim the name
+- `VERIFY` (yellow): an edge case, where takeover depends on the provider's conditions, so check it manually
+
+A summary follows with counts of findings, DNS issues and request errors. The details of every issue, including each DNS and request error, are written to a log file, `subtocheck-<timestamp>.log` in the current directory by default. The file is only created if there is something to record.
+
+Options:
+
+| Option | |
+|---|---|
+| `--domains <path>` | domain list file (default `domains.txt`) |
+| `--log <path>` | log file path |
+| `--quiet` | no console output; the log file is still written |
+| `--debug` | also write debug messages to the log file |
+| `--config <path>` | email configuration (see below) |
+
+When the output is not a terminal, for example piped or run from cron, the progress bar and colours are left out. Colour can also be turned off with `NO_COLOR=1`.
 
 ## <a name="sending-email-reports"></a>sending email reports
 

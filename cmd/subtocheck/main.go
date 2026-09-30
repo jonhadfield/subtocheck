@@ -30,7 +30,8 @@ var (
 	domainListPath = kingpin.Flag("domains", "domain list file path").Default("domains.txt").String()
 	configPath     = kingpin.Flag("config", "config file").String()
 	quiet          = kingpin.Flag("quiet", "suppress command line output").Bool()
-	debug          = kingpin.Flag("debug", "enable debug").Bool()
+	debug          = kingpin.Flag("debug", "write debug messages to the log").Bool()
+	logPath        = kingpin.Flag("log", "log file path (default: subtocheck-<timestamp>.log)").String()
 )
 
 // overwritten at build time
@@ -99,14 +100,14 @@ func main() {
 	kingpin.UsageTemplate(usageTemplate)
 
 	if *quiet && *configPath == "" {
-		fmt.Println("warning: running without console output and without email config ¯\\_(ツ)_/¯")
+		fmt.Println("warning: running without console output or email config: results are only written to the log file")
 	}
 
 	domainsPath, err := getDomainListFilePath(*domainListPath)
 	if err != nil {
 		kingpin.Fatalf("%v: create it with one domain per line, or set its path with --domains", err)
 	}
-	if err = subtocheck.CheckDomains(domainsPath, configPath, debug, quiet); err != nil {
+	if err = subtocheck.CheckDomains(domainsPath, configPath, debug, quiet, *logPath); err != nil {
 		kingpin.Fatalf("%v", err)
 	}
 }

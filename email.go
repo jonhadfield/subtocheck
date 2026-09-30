@@ -239,13 +239,13 @@ func emailResults(email emailConfig, pIssues processedIssues) (err error) {
 func cleanUpFiles(dnsIssuesFilePath string, requestIssuesFilePath string) {
 	if dnsIssuesFilePath != "" {
 		delDNSErr := os.Remove(dnsIssuesFilePath)
-		if delDNSErr != nil {
+		if delDNSErr != nil && !os.IsNotExist(delDNSErr) {
 			fmt.Println(delDNSErr)
 		}
 	}
 	if requestIssuesFilePath != "" {
 		delReqErr := os.Remove(requestIssuesFilePath)
-		if delReqErr != nil {
+		if delReqErr != nil && !os.IsNotExist(delReqErr) {
 			fmt.Println(delReqErr)
 		}
 	}
