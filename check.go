@@ -294,8 +294,9 @@ func addIssues(i issues) {
 	domainIssues = append(domainIssues, i...)
 }
 
-// CheckDomains is called from cmd/subtocheck/main.go to kick off the scans
-func CheckDomains(path string, configPath *string, debug *bool, quiet *bool) {
+// CheckDomains is called from cmd/subtocheck/main.go to kick off the scans. It returns an
+// error if the report could not be emailed.
+func CheckDomains(path string, configPath *string, debug *bool, quiet *bool) error {
 	var conf config
 	if *configPath != "" {
 		conf = readConfig(*configPath)
@@ -356,25 +357,21 @@ func CheckDomains(path string, configPath *string, debug *bool, quiet *bool) {
 		if *debug {
 			fmt.Println("\nDEBUG: no issues found. skipping email.")
 		}
-		return
+		return nil
 	}
 	if conf.Email.SkipNoVulns && noVulnsFound {
 		if *debug {
 			fmt.Println("\nDEBUG: no vulnerabilities found. skipping email.")
 		}
-		return
+		return nil
 	}
 	if conf.Email.Provider != "" {
 		if *debug {
 			fmt.Println("\nDEBUG: sending email")
 		}
-		emailErr := emailResults(conf.Email, pIssues)
-		if emailErr != nil {
-			fmt.Println("failed to send email")
-			fmt.Println("-- error --")
-			fmt.Printf("%+v\n", emailErr)
-		}
+		return emailResults(conf.Email, pIssues)
 	}
+	return nil
 }
 
 func worker(id int, jobs <-chan string, results chan<- bool, debug *bool) {
