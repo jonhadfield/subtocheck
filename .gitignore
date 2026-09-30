@@ -16,3 +16,6 @@
 # Build and release output
 dist/
 coverage.txt
+
+# Local domain list used for test runs
+domains.txt
