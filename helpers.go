@@ -1,57 +1,19 @@
 package subtocheck
 
 import (
-	"fmt"
+	"os"
 	"strings"
 
 	"golang.org/x/term"
 )
 
-// terminalWidth returns the width of the terminal on stdin, or 80 if there is none.
+// terminalWidth returns the width of the terminal on stdout, or 80 if there is none.
 func terminalWidth() int {
-	width, _, err := term.GetSize(0)
+	width, _, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil || width <= 0 {
 		return 80
 	}
 	return width
-}
-
-func padToWidth(input string, trimToWidth bool) (output string) {
-	// Split string into lines
-	var lines []string
-	var newLines []string
-	if strings.Contains(input, "\n") {
-		lines = strings.Split(input, "\n")
-	} else {
-		lines = []string{input}
-	}
-	var paddingSize int
-	for i, line := range lines {
-		width := terminalWidth()
-		// No padding for a line that already meets or exceeds console width
-		length := len(line)
-
-		if length >= width {
-			if trimToWidth {
-				output = line[0:width]
-			} else {
-				output = input
-			}
-			return
-		} else if i == len(lines)-1 {
-			paddingSize = width - len(line)
-			if paddingSize >= 1 {
-				newLines = append(newLines, fmt.Sprintf("%s%s\r", line, strings.Repeat(" ", paddingSize)))
-			} else {
-				newLines = append(newLines, fmt.Sprintf("%s\r", line))
-			}
-		} else {
-			var suffix string
-			newLines = append(newLines, fmt.Sprintf("%s%s%s\n", line, strings.Repeat(" ", paddingSize), suffix))
-		}
-	}
-	output = strings.Join(newLines, "")
-	return
 }
 
 func contains(s []int, e int) bool {

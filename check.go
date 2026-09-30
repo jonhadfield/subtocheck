@@ -3,7 +3,6 @@ package subtocheck
 import (
 	"bufio"
 	"crypto/tls"
-	"fmt"
 	"io"
 	"math/rand/v2"
 	"net"
@@ -13,8 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"reflect"
 
 	"github.com/miekg/dns"
 	"github.com/pkg/errors"
@@ -43,13 +40,15 @@ type issue struct {
 	fqdn     string
 	url      string
 	err      error
+	detail   string // for findings, extra context shown after the platform
+	edgeCase bool   // for findings, takeover depends on provider conditions
 }
 
 type issues []issue
 
 // checkResolves resolves the fqdn and returns any DNS issues along with the CNAME
 // targets followed, so later checks can tell which provider serves the name.
-func checkResolves(fqdn string, debug *bool) (issues issues, cnames []string) {
+func checkResolves(fqdn string, log *scanLog) (issues issues, cnames []string) {
 	c := new(dns.Client)
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(fqdn), dns.TypeA)
@@ -59,9 +58,7 @@ func checkResolves(fqdn string, debug *bool) (issues issues, cnames []string) {
 	var err error
 	resolveMutex.Lock()
 	ns := rand.IntN(len(nameservers))
-	if *debug {
-		fmt.Printf("DEBUG: resolving \"%s\" with nameserver %s\n", fqdn, nameservers[ns])
-	}
+	log.debugf("resolving %q with nameserver %s", fqdn, nameservers[ns])
 	record, _, err = c.Exchange(m, net.JoinHostPort(nameservers[ns], strconv.Itoa(53)))
 	resolveMutex.Unlock()
 	if err == nil {
@@ -82,8 +79,8 @@ func checkResolves(fqdn string, debug *bool) (issues issues, cnames []string) {
 			nameservers[ns])
 		issues = append(issues, issue{kind: "dns", fqdn: fqdn, err: err})
 	}
-	if *debug && err != nil {
-		fmt.Printf("DEBUG: error: %v\n", err)
+	if err != nil {
+		log.debugf("%s", about(fqdn, err))
 	}
 
 	return
@@ -110,6 +107,7 @@ func danglingCNAMEIssue(fqdn, target string) issue {
 				fqdn:     fqdn,
 				url:      fqdn,
 				err:      errors.Errorf("CNAME to %s, which does not exist, matches platform: %s", target, pattern.platform),
+				detail:   "CNAME to " + target + ", which does not exist",
 			}
 		}
 	}
@@ -130,7 +128,7 @@ func hasSuffix(host string, domains []string) bool {
 	return false
 }
 
-func checkResponse(fqdn string, cnames []string, protocols []string, debug *bool) (issues issues) {
+func checkResponse(fqdn string, cnames []string, protocols []string, log *scanLog) (issues issues) {
 	var clientTransportTimeoutSecs = 3
 	var responseHeaderTimeoutSecs = 2
 
@@ -161,10 +159,8 @@ func checkResponse(fqdn string, cnames []string, protocols []string, debug *bool
 		}
 		var httpResp *http.Response
 		var err error
-		if *debug {
-			fmt.Printf("DEBUG: requesting URL \"%s\" with client transport timeout: %d secs and resp. header"+
-				" timeout: %d secs\n", httpURL, clientTransportTimeoutSecs, responseHeaderTimeoutSecs)
-		}
+		log.debugf("requesting %q with client timeout %ds and response header timeout %ds",
+			httpURL, clientTransportTimeoutSecs, responseHeaderTimeoutSecs)
 		httpResp, err = client.Get(httpURL)
 		if err != nil {
 			issues = append(issues, issue{kind: "request", fqdn: fqdn, url: httpURL, err: err})
@@ -193,14 +189,18 @@ func checkVulnerable(url string, response *http.Response, cnames []string, redir
 	for _, pattern := range vPatterns {
 		if matchesPattern(pattern, response.StatusCode, bodyText, headerText, cnames, redirects) {
 			msg := "matches pattern for platform: " + pattern.platform
+			var detail string
 			if pattern.edgeCase {
-				msg += " (edge case: takeover depends on provider conditions, verify manually)"
+				detail = "takeover depends on provider conditions, verify manually"
+				msg += " (edge case: " + detail + ")"
 			}
 			return issue{
 				url:      url,
 				kind:     "vuln",
 				platform: pattern.platform,
 				err:      errors.New(msg),
+				detail:   detail,
+				edgeCase: pattern.edgeCase,
 			}
 		}
 	}
@@ -283,108 +283,105 @@ func anyContains(values []string, substrings []string) bool {
 	return false
 }
 
-var (
-	domainIssues      issues
-	domainIssuesMutex sync.Mutex
-)
-
-func addIssues(i issues) {
-	domainIssuesMutex.Lock()
-	defer domainIssuesMutex.Unlock()
-	domainIssues = append(domainIssues, i...)
+// scanResult is the outcome of checking one domain.
+type scanResult struct {
+	domain string
+	issues issues
 }
 
-// CheckDomains is called from cmd/subtocheck/main.go to kick off the scans. It returns an
-// error if the report could not be emailed.
-func CheckDomains(path string, configPath *string, debug *bool, quiet *bool) error {
+// CheckDomains is called from cmd/subtocheck/main.go to kick off the scans. Findings are
+// shown as they are found and every issue is written to the log at logPath, or a
+// timestamped file in the working directory if it is empty. It returns an error if the
+// report could not be emailed.
+func CheckDomains(path string, configPath *string, debug *bool, quiet *bool, logPath string) error {
 	var conf config
 	if *configPath != "" {
 		conf = readConfig(*configPath)
 	}
-	file, _ := os.Open(path)
-	domainScanner := bufio.NewScanner(file)
+	file, err := os.Open(path)
+	if err != nil {
+		return errors.Wrap(err, "failed to read domains list")
+	}
 	var domains []string
+	domainScanner := bufio.NewScanner(file)
 	for domainScanner.Scan() {
-		entry := domainScanner.Text()
-		if entry != "" {
+		if entry := strings.TrimSpace(domainScanner.Text()); entry != "" {
 			domains = append(domains, entry)
 		}
 	}
-	jobs := make(chan string, len(domains))
-	results := make(chan bool, len(domains))
+	_ = file.Close()
 
-	for w := 1; w <= 10; w++ {
-		go worker(w, jobs, results, debug)
+	start := time.Now()
+	if logPath == "" {
+		logPath = defaultLogPath(start)
 	}
-	numDomains := len(domains)
-	for j := 0; j < numDomains; j++ {
-		jobs <- domains[j]
+	log := newScanLog(logPath, *debug)
+	con := newConsole(*quiet, len(domains))
+
+	jobs := make(chan string, len(domains))
+	results := make(chan scanResult, len(domains))
+	for w := 1; w <= 10; w++ {
+		go worker(w, jobs, results, log)
+	}
+	for _, domain := range domains {
+		jobs <- domain
 	}
 	close(jobs)
 
-	var progress string
-	for a := 1; a <= numDomains; a++ {
-		if !*quiet {
-			progress = fmt.Sprintf("Processing... %d/%d %s", a, numDomains, domains[a-1])
-			progress = padToWidth(progress, true)
-			width := terminalWidth()
-			if len(progress) == width {
-				fmt.Print(progress[0:width-3] + "   \r")
-			} else {
-				fmt.Print(progress)
-			}
-		}
-
-		<-results
+	// a nil channel never fires, so the spinner only animates on a terminal
+	var ticks <-chan time.Time
+	if con.interactive {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		ticks = ticker.C
 	}
-	pIssues := getIssuesSummary(domainIssues)
-	var noIssuesFound, noVulnsFound bool
-
-	if !*quiet {
-		fmt.Printf("%s", padToWidth(" ", false))
-		if !reflect.DeepEqual(pIssues, processedIssues{}) {
-			displayIssues(pIssues)
-			if len(pIssues.potVulns) == 0 {
-				noVulnsFound = true
+	con.drawBar()
+	var all issues
+	for received := 0; received < len(domains); {
+		select {
+		case r := <-results:
+			received++
+			for _, i := range r.issues {
+				log.issue(i)
+				if i.kind == "vuln" {
+					con.finding(i)
+				}
 			}
-		} else {
-			noIssuesFound = true
-			fmt.Println("\nno issues found.")
+			all = append(all, r.issues...)
+			con.progress(r.domain)
+		case <-ticks:
+			con.tick()
 		}
 	}
+
+	pIssues := getIssuesSummary(all)
+	var summaryLogPath string
+	if log.written() {
+		summaryLogPath = logPath
+	}
+	logErr := log.Close()
+	con.summary(pIssues, time.Since(start), summaryLogPath, logErr)
+
 	// send notifications
-	if noIssuesFound {
-		if *debug {
-			fmt.Println("\nDEBUG: no issues found. skipping email.")
-		}
+	if len(all) == 0 {
 		return nil
 	}
-	if conf.Email.SkipNoVulns && noVulnsFound {
-		if *debug {
-			fmt.Println("\nDEBUG: no vulnerabilities found. skipping email.")
-		}
+	if conf.Email.SkipNoVulns && len(pIssues.potVulns) == 0 {
 		return nil
 	}
 	if conf.Email.Provider != "" {
-		if *debug {
-			fmt.Println("\nDEBUG: sending email")
-		}
 		return emailResults(conf.Email, pIssues)
 	}
 	return nil
 }
 
-func worker(id int, jobs <-chan string, results chan<- bool, debug *bool) {
-	for j := range jobs {
-		if *debug {
-			fmt.Printf("DEBUG: worker: %d\n", id)
+func worker(id int, jobs <-chan string, results chan<- scanResult, log *scanLog) {
+	for domain := range jobs {
+		log.debugf("worker %d: checking %s", id, domain)
+		found, cnames := checkResolves(domain, log)
+		if len(found) == 0 {
+			found = checkResponse(domain, cnames, protocols, log)
 		}
-		resolveIssues, cnames := checkResolves(j, debug)
-		if len(resolveIssues) > 0 {
-			addIssues(resolveIssues)
-		} else {
-			addIssues(checkResponse(j, cnames, protocols, debug))
-		}
-		results <- true
+		results <- scanResult{domain: domain, issues: found}
 	}
 }
