@@ -106,5 +106,7 @@ func main() {
 	if err != nil {
 		kingpin.Fatalf("%v: create it with one domain per line, or set its path with --domains", err)
 	}
-	subtocheck.CheckDomains(domainsPath, configPath, debug, quiet)
+	if err = subtocheck.CheckDomains(domainsPath, configPath, debug, quiet); err != nil {
+		kingpin.Fatalf("%v", err)
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -73,7 +74,7 @@ func validateEmailSettings(email emailConfig) (err error) {
 	return
 }
 
-func generateDNSIssueList(dnsIssues []issue) (filePath string) {
+func generateDNSIssueList(dnsIssues []issue) (filePath string, err error) {
 	timeStamp := time.Now().UTC().Format("20060102150405")
 	filePath = fmt.Sprintf("dns_issues_%s.txt", timeStamp)
 	// convert issues to file content
@@ -81,13 +82,13 @@ func generateDNSIssueList(dnsIssues []issue) (filePath string) {
 	for _, dnsIssue := range dnsIssues {
 		buffer.WriteString(dnsIssue.fqdn + " - " + dnsIssue.err.Error() + "\n")
 	}
-	if writeErr := os.WriteFile(filePath, buffer.Bytes(), 0o644); writeErr != nil {
-		panic(writeErr)
+	if err = os.WriteFile(filePath, buffer.Bytes(), 0o644); err != nil {
+		err = errors.Wrap(err, "failed to write DNS issues attachment")
 	}
 	return
 }
 
-func generateRequestIssueList(requestIssues []issue) (filePath string) {
+func generateRequestIssueList(requestIssues []issue) (filePath string, err error) {
 	timeStamp := time.Now().UTC().Format("20060102150405")
 	filePath = fmt.Sprintf("request_issues_%s.txt", timeStamp)
 	// convert issues to file content
@@ -95,8 +96,8 @@ func generateRequestIssueList(requestIssues []issue) (filePath string) {
 	for _, requestIssue := range requestIssues {
 		buffer.WriteString(requestIssue.url + " - " + requestIssue.err.Error() + "\n")
 	}
-	if writeErr := os.WriteFile(filePath, buffer.Bytes(), 0o644); writeErr != nil {
-		panic(writeErr)
+	if err = os.WriteFile(filePath, buffer.Bytes(), 0o644); err != nil {
+		err = errors.Wrap(err, "failed to write request issues attachment")
 	}
 	return
 }
@@ -156,22 +157,32 @@ func emailResults(email emailConfig, pIssues processedIssues) (err error) {
 	msg.SetBody("text/html", body)
 
 	var dnsIssuesFilePath, requestIssuesFilePath string
+	// the attachments are only removed if sending fails
+	defer func() {
+		if err != nil {
+			cleanUpFiles(dnsIssuesFilePath, requestIssuesFilePath)
+		}
+	}()
 	if len(pIssues.DNS) > 0 {
 		// generate DNS issues file to attach
-		dnsIssuesFilePath = generateDNSIssueList(pIssues.DNS)
+		if dnsIssuesFilePath, err = generateDNSIssueList(pIssues.DNS); err != nil {
+			return
+		}
 		msg.Attach(dnsIssuesFilePath)
 	}
 
 	if len(pIssues.request) > 0 {
 		// generate requests issues file to attach
-		requestIssuesFilePath = generateRequestIssueList(pIssues.request)
+		if requestIssuesFilePath, err = generateRequestIssueList(pIssues.request); err != nil {
+			return
+		}
 		msg.Attach(requestIssuesFilePath)
 	}
 
 	var emailRaw bytes.Buffer
 	_, err = msg.WriteTo(&emailRaw)
 	if err != nil {
-		err = errors.WithStack(err)
+		err = errors.Wrap(err, "failed to build email")
 		return
 	}
 
@@ -188,12 +199,12 @@ func emailResults(email emailConfig, pIssues processedIssues) (err error) {
 		var cfg aws.Config
 		cfg, err = awsconfig.LoadDefaultConfig(ctx, opts...)
 		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			err = errors.Wrap(err, "failed to load AWS configuration")
+			return
 		}
 		err = validateEmailSettings(email)
 		if err != nil {
-			fmt.Println(err)
+			err = errors.Wrap(err, "invalid email settings")
 			return
 		}
 		msg.SetHeader("To", strings.Join(email.Recipients, ","))
@@ -205,7 +216,7 @@ func emailResults(email emailConfig, pIssues processedIssues) (err error) {
 		}
 		_, err = svc.SendRawEmail(ctx, &input)
 		if err != nil {
-			panic(err)
+			err = errors.Wrap(err, "failed to send email via SES")
 		}
 	case "smtp":
 		msg.SetHeader("To", email.Recipients...)
@@ -219,8 +230,7 @@ func emailResults(email emailConfig, pIssues processedIssues) (err error) {
 		dialer.TLSConfig = tlsConfig
 		err = dialer.DialAndSend(msg)
 		if err != nil {
-			cleanUpFiles(dnsIssuesFilePath, requestIssuesFilePath)
-			panic(err)
+			err = errors.Wrapf(err, "failed to send email via SMTP server %s", net.JoinHostPort(host, email.Port))
 		}
 	}
 	return
