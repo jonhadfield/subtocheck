@@ -144,6 +144,14 @@ Options:
 
 When the output is not a terminal, for example piped or run from cron, the progress bar and colours are left out. Colour can also be turned off with `NO_COLOR=1`.
 
+Exit status, for scripts and CI:
+
+| Status | Meaning |
+|---|---|
+| `0` | no potential takeovers found |
+| `1` | an error, such as a missing domains file or a failure to send the email report |
+| `2` | at least one potential takeover found, including those to verify manually |
+
 ## <a name="sending-email-reports"></a>sending email reports
 
 SMTP (TLS Only) and AWS SES (Simple Email Service) are supported. If defined, then a report will be emailed that includes a body with a count of respective issues and a list of FQDNs that may be vulnerable to takeovers. Attached to the email will be separate lists of DNS and request issues encountered during the scan.

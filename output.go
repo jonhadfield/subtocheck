@@ -128,20 +128,7 @@ func (c *console) summary(p processedIssues, elapsed time.Duration, logPath stri
 	if c.quiet {
 		return
 	}
-	var takeovers, verify int
-	counted := map[string]bool{}
-	for _, v := range p.potVulns {
-		key := v.fqdn + "|" + v.platform
-		if counted[key] {
-			continue
-		}
-		counted[key] = true
-		if v.edgeCase {
-			verify++
-		} else {
-			takeovers++
-		}
-	}
+	takeovers, verify := countFindings(p.potVulns)
 
 	lines := []string{
 		styleTarget.Render(fmt.Sprintf("Scanned %d %s", c.total, plural(c.total, "domain", "domains"))) +
@@ -165,6 +152,25 @@ func (c *console) summary(p processedIssues, elapsed time.Duration, logPath stri
 		lines = append(lines, "", styleDim.Render("Details: "+logPath))
 	}
 	_, _ = fmt.Fprintln(c.out, styleBox.Render(strings.Join(lines, "\n")))
+}
+
+// countFindings counts potential takeovers and edge cases to verify, once per host and
+// platform, as a host usually matches over both http and https.
+func countFindings(vulns []issue) (takeovers, verify int) {
+	counted := map[string]bool{}
+	for _, v := range vulns {
+		key := v.fqdn + "|" + v.platform
+		if counted[key] {
+			continue
+		}
+		counted[key] = true
+		if v.edgeCase {
+			verify++
+		} else {
+			takeovers++
+		}
+	}
+	return takeovers, verify
 }
 
 func countLine(n int, style lipgloss.Style, singular, pluralForm string) string {

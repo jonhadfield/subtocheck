@@ -34,6 +34,9 @@ var (
 	logPath        = kingpin.Flag("log", "log file path (default: subtocheck-<timestamp>.log)").String()
 )
 
+// exitFindings is the exit status when potential takeovers are found. Errors exit with 1.
+const exitFindings = 2
+
 // overwritten at build time
 var version, versionOutput, tag, sha, buildDate string
 
@@ -107,7 +110,12 @@ func main() {
 	if err != nil {
 		kingpin.Fatalf("%v: create it with one domain per line, or set its path with --domains", err)
 	}
-	if err = subtocheck.CheckDomains(domainsPath, configPath, debug, quiet, *logPath); err != nil {
+	findings, err := subtocheck.CheckDomains(domainsPath, configPath, debug, quiet, *logPath)
+	if err != nil {
 		kingpin.Fatalf("%v", err)
+	}
+	if findings > 0 {
+		// lets scripts and CI act on findings without parsing the output
+		os.Exit(exitFindings)
 	}
 }
