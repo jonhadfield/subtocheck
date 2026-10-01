@@ -33,6 +33,8 @@ subtocheck performs these checks for each FQDN:
 
 If the name has a CNAME whose target does not exist (NXDOMAIN), the record is dangling. Where the target belongs to a provider that lets anyone register a deleted resource's name again, such as Azure App Service, that is reported as a potential vulnerability without any request being needed. Other dangling CNAMEs are reported as DNS issues, as the target domain itself may be available to register.
 
+If resolvers fail to answer for the name (SERVFAIL or REFUSED), subtocheck follows its delegations from the top-level domain down, asking each zone's nameservers directly. A name delegated to nameservers that do not serve its zone, usually because the zone was deleted from the DNS host, is a dangling delegation. Where the host lets any account create a zone of that name, whoever does so controls every record under it, so it is reported as a potential takeover; otherwise it is reported as a DNS issue. Only public DNS is queried.
+
 Otherwise, if the name cannot be resolved then the FQDN is not in public DNS and therefore it isn't vulnerable to a public subdomain takeover.
 
 If the name can be resolved but responses cannot be retrieved over http nor https then it isn't vulnerable to a public subdomain takeover.
@@ -47,6 +49,11 @@ Dangling CNAME to:
 - AWS Elastic Beanstalk
 - Azure: App Service, Cloud Services, Public IP addresses, Traffic Manager, Blob Storage, CDN, Front Door, Container Instances, API Management
 - Discourse
+
+Dangling NS delegation to (from [can-i-take-over-dns](https://github.com/indianajson/can-i-take-over-dns)):
+- DigitalOcean, DNS Made Easy, Hurricane Electric, Linode, Reg.ru, TierraNet
+- Domain.com, Name.com and Yahoo Small Business, where takeover requires a paid account
+- Edge cases, reported to verify manually: Azure DNS, DreamHost, Google Cloud DNS
 
 Response fingerprint:
 
