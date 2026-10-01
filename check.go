@@ -69,7 +69,7 @@ func checkResolves(fqdn string, log *scanLog) (issues issues, cnames []string) {
 		issues = append(issues, issue{kind: "dns", fqdn: fqdn, err: err})
 	} else if record.Rcode == dns.RcodeNameError && len(cnames) > 0 {
 		// the name exists but the CNAME points at a name that does not
-		issues = append(issues, danglingCNAMEIssue(fqdn, cnames[len(cnames)-1]))
+		issues = append(issues, danglingCNAMEIssue(fqdn, cnames[len(cnames)-1], registrations.status))
 		err = issues[len(issues)-1].err
 	} else if record.Rcode == dns.RcodeServerFailure || record.Rcode == dns.RcodeRefused {
 		// what a resolver returns for a name delegated to nameservers that do not serve it
@@ -106,9 +106,10 @@ func cnameTargets(record *dns.Msg) (targets []string) {
 	return
 }
 
-// danglingCNAMEIssue reports a CNAME whose target does not exist. If the target belongs to
-// a provider where deleted names can be registered again, it is a potential vulnerability.
-func danglingCNAMEIssue(fqdn, target string) issue {
+// danglingCNAMEIssue reports a CNAME whose target does not exist. It is a potential
+// vulnerability if the target belongs to a provider where deleted names can be registered
+// again, or if the target's own domain is not registered, so anyone could register it.
+func danglingCNAMEIssue(fqdn, target string, registration registrationLookup) issue {
 	for _, pattern := range cnamePatterns {
 		if hasSuffix(target, pattern.suffixes) {
 			return issue{
@@ -121,10 +122,36 @@ func danglingCNAMEIssue(fqdn, target string) issue {
 			}
 		}
 	}
-	return issue{
+	notExist := issue{
 		kind: "dns",
 		fqdn: fqdn,
 		err:  errors.Errorf("%s is a dangling CNAME: target %s does not exist", fqdn, target),
+	}
+	domain := registeredDomain(target)
+	// a target within the scanned name's own domain cannot be registered by anyone else
+	if domain == "" || domain == registeredDomain(fqdn) {
+		return notExist
+	}
+	finding := func(platform, detail string, edgeCase bool) issue {
+		return issue{
+			kind:     "vuln",
+			platform: platform,
+			fqdn:     fqdn,
+			url:      fqdn,
+			err:      errors.Errorf("CNAME to %s: %s", target, detail),
+			detail:   "CNAME to " + target + "; " + detail,
+			edgeCase: edgeCase,
+		}
+	}
+	switch registration(domain) {
+	case statusUnregistered:
+		return finding("Unregistered domain", domain+" is not registered, so may be available to register", false)
+	case statusUnconfirmed:
+		return finding("Unregistered domain", domain+" has no DNS and its registry has no RDAP service to confirm whether it is registered", true)
+	case statusUndelegated:
+		return finding("Undelegated domain", domain+" is registered but has no nameservers, so its registration may have expired", true)
+	default:
+		return notExist
 	}
 }
 
