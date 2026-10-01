@@ -71,6 +71,16 @@ func checkResolves(fqdn string, log *scanLog) (issues issues, cnames []string) {
 		// the name exists but the CNAME points at a name that does not
 		issues = append(issues, danglingCNAMEIssue(fqdn, cnames[len(cnames)-1]))
 		err = issues[len(issues)-1].err
+	} else if record.Rcode == dns.RcodeServerFailure || record.Rcode == dns.RcodeRefused {
+		// what a resolver returns for a name delegated to nameservers that do not serve it
+		if dangling := newDelegationChecker(log).check(fqdn); dangling != nil {
+			issues = append(issues, *dangling)
+			err = dangling.err
+		} else {
+			err = errors.Errorf("%s could not be resolved (%s from %s)", fqdn, dns.RcodeToString[record.Rcode],
+				nameservers[ns])
+			issues = append(issues, issue{kind: "dns", fqdn: fqdn, err: err})
+		}
 	} else if len(record.Answer) == 0 {
 		err = errors.Errorf("%s could not be resolved (no answer from %s)", fqdn, nameservers[ns])
 		issues = append(issues, issue{kind: "dns", fqdn: fqdn, err: err})

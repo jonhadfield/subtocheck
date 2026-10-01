@@ -1,5 +1,7 @@
 package subtocheck
 
+import "regexp"
+
 // Provider fingerprints for detecting subdomains that may be vulnerable to takeover.
 //
 // Sources, both checked September 2026:
@@ -306,4 +308,52 @@ var cnamePatterns = []cnamePattern{
 		platform: "Discourse",
 		suffixes: []string{"trydiscourse.com"},
 	},
+}
+
+// nsPattern identifies a DNS hosting provider from the hostnames of the nameservers a
+// name is delegated to. If none of those nameservers serves the zone, it has been deleted
+// from the provider, and where the provider lets any account create a zone of that name,
+// whoever does so controls every record under it.
+//
+// Source, checked October 2026: https://github.com/indianajson/can-i-take-over-dns.
+// Providers it rates "Not Vulnerable", such as Route 53 and Cloudflare, are not listed:
+// a dangling delegation to them is reported as a DNS issue instead.
+type nsPattern struct {
+	platform string
+	edgeCase bool
+	// note is shown with a finding, for conditions on the takeover
+	note        string
+	nameservers *regexp.Regexp
+}
+
+var nsPatterns = []nsPattern{
+	{platform: "DigitalOcean DNS", nameservers: regexp.MustCompile(`^ns[1-3]\.digitalocean\.com$`)},
+	{platform: "DNS Made Easy", nameservers: regexp.MustCompile(`^ns\d+\.dnsmadeeasy\.com$`)},
+	{platform: "Domain.com DNS", note: "requires a paid account", nameservers: regexp.MustCompile(`^ns[12]\.domain\.com$`)},
+	{platform: "Hurricane Electric DNS", nameservers: regexp.MustCompile(`^ns[1-5]\.he\.net$`)},
+	{platform: "Linode DNS", nameservers: regexp.MustCompile(`^ns\d+\.linode\.com$`)},
+	{platform: "Name.com DNS", note: "requires a paid account", nameservers: regexp.MustCompile(`^ns[1-4][a-z0-9]*\.name\.com$`)},
+	{platform: "Reg.ru DNS", nameservers: regexp.MustCompile(`^ns\d\.reg\.ru$`)},
+	{platform: "TierraNet DNS", nameservers: regexp.MustCompile(`^ns[12]\.domaindiscover\.com$`)},
+	{platform: "Yahoo Small Business DNS", note: "requires a paid account", nameservers: regexp.MustCompile(`^yns[12]\.yahoo\.com$`)},
+	{platform: "Azure DNS", edgeCase: true, nameservers: regexp.MustCompile(`^ns[1-4]-\d+\.azure-dns\.(com|net|org|info)$`)},
+	{platform: "DreamHost DNS", edgeCase: true, nameservers: regexp.MustCompile(`^ns[1-3]\.dreamhost\.com$`)},
+	{platform: "Google Cloud DNS", edgeCase: true, nameservers: regexp.MustCompile(`^ns-cloud-[a-z]\d+\.googledomains\.com$`)},
+}
+
+// nsProvider returns the pattern matching all of a delegation's nameservers, if any.
+func nsProvider(nameservers []string) (nsPattern, bool) {
+	for _, p := range nsPatterns {
+		matched := len(nameservers) > 0
+		for _, ns := range nameservers {
+			if !p.nameservers.MatchString(ns) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return p, true
+		}
+	}
+	return nsPattern{}, false
 }
