@@ -176,3 +176,18 @@ func TestNilScanLogIsSafe(t *testing.T) {
 		t.Error("expected a nil log to do nothing")
 	}
 }
+
+func TestCountFindings(t *testing.T) {
+	takeovers, verify := countFindings([]issue{
+		finding("a.example.com", "S3", false),
+		finding("a.example.com", "S3", false), // the same finding over http
+		finding("b.example.com", "S3", false),
+		finding("c.example.com", "GitHub Pages", true),
+	})
+	if takeovers != 2 || verify != 1 {
+		t.Errorf("expected 2 takeovers and 1 to verify, got %d and %d", takeovers, verify)
+	}
+	if takeovers, verify := countFindings(nil); takeovers+verify != 0 {
+		t.Errorf("expected no findings, got %d and %d", takeovers, verify)
+	}
+}

@@ -328,16 +328,17 @@ type scanResult struct {
 
 // CheckDomains is called from cmd/subtocheck/main.go to kick off the scans. Findings are
 // shown as they are found and every issue is written to the log at logPath, or a
-// timestamped file in the working directory if it is empty. It returns an error if the
-// report could not be emailed.
-func CheckDomains(path string, configPath *string, debug *bool, quiet *bool, logPath string) error {
+// timestamped file in the working directory if it is empty. It returns the number of
+// potential takeovers found, including those to verify manually, and an error if the
+// domains could not be read or the report could not be emailed.
+func CheckDomains(path string, configPath *string, debug *bool, quiet *bool, logPath string) (int, error) {
 	var conf config
 	if *configPath != "" {
 		conf = readConfig(*configPath)
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return errors.Wrap(err, "failed to read domains list")
+		return 0, errors.Wrap(err, "failed to read domains list")
 	}
 	var domains []string
 	domainScanner := bufio.NewScanner(file)
@@ -398,18 +399,20 @@ func CheckDomains(path string, configPath *string, debug *bool, quiet *bool, log
 	}
 	logErr := log.Close()
 	con.summary(pIssues, time.Since(start), summaryLogPath, logErr)
+	takeovers, verify := countFindings(pIssues.potVulns)
+	findings := takeovers + verify
 
 	// send notifications
 	if len(all) == 0 {
-		return nil
+		return findings, nil
 	}
 	if conf.Email.SkipNoVulns && len(pIssues.potVulns) == 0 {
-		return nil
+		return findings, nil
 	}
 	if conf.Email.Provider != "" {
-		return emailResults(conf.Email, pIssues)
+		return findings, emailResults(conf.Email, pIssues)
 	}
-	return nil
+	return findings, nil
 }
 
 func worker(id int, jobs <-chan string, results chan<- scanResult, log *scanLog) {
