@@ -81,7 +81,26 @@ func (q *dnsQueries) exchange(server, name string, qtype uint16, recurse bool) (
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(name), qtype)
 	m.RecursionDesired = recurse
-	r, _, err := q.client.Exchange(m, net.JoinHostPort(server, "53"))
+	return exchangeDNS(q.client, m, net.JoinHostPort(server, "53"))
+}
+
+// ednsBufferSize is the UDP payload size advertised with EDNS, as recommended to avoid
+// fragmentation. Without EDNS, replies are limited to 512 bytes, which signed zones often
+// exceed.
+const ednsBufferSize = 1232
+
+// exchangeDNS sends a query to address (host:port) over UDP with EDNS, and again over TCP
+// if the reply was truncated, as a truncated reply can leave out the records asked for.
+func exchangeDNS(client *dns.Client, m *dns.Msg, address string) (*dns.Msg, error) {
+	if m.IsEdns0() == nil {
+		m.SetEdns0(ednsBufferSize, false)
+	}
+	r, _, err := client.Exchange(m, address)
+	if err == nil && r != nil && r.Truncated {
+		tcp := *client
+		tcp.Net = "tcp"
+		r, _, err = tcp.Exchange(m, address)
+	}
 	return r, err
 }
 
@@ -126,16 +145,19 @@ func (c *delegationChecker) check(fqdn string, log *scanLog) *issue {
 		if unregistered := c.unregisteredNameserver(fqdn, zone, delegated); unregistered != nil {
 			return unregistered
 		}
-		addresses := c.addresses(delegated)
-		switch c.serving(addresses, zone) {
-		case servingYes:
-			servers = addresses
-		case servingNo:
-			return danglingDelegationIssue(fqdn, zone, delegated)
-		default:
+		served, notServing := c.servingByHost(delegated, zone)
+		switch {
+		case len(served) == 0 && len(notServing) == 0:
 			// the nameservers could not be reached, so nothing can be concluded
 			return nil
+		case len(served) == 0:
+			return danglingDelegationIssue(fqdn, zone, delegated)
+		case len(notServing) > 0:
+			// resolvers pick nameservers at random, so the ones that do not serve the zone
+			// still receive a share of the queries for it
+			return partlyDanglingIssue(fqdn, zone, notServing)
 		}
+		servers = served
 	}
 	return nil
 }
@@ -190,30 +212,29 @@ func delegationTo(resp *dns.Msg, zone string) []string {
 	return nil
 }
 
-type serving int
-
-const (
-	servingUnknown serving = iota
-	servingYes
-	servingNo
-)
-
-// serving asks each nameserver for the zone's SOA. A nameserver serves the zone only if it
-// answers authoritatively with the zone's own SOA: a refusal, or an answer from another
-// zone on the same host, means it does not.
-func (c *delegationChecker) serving(addresses []string, zone string) serving {
-	result := servingUnknown
-	for _, ip := range addresses {
-		resp, err := c.ask(ip, zone, dns.TypeSOA)
-		if err != nil || resp == nil {
+// servingByHost asks each delegated nameserver for the zone's SOA. It returns the
+// addresses of the nameservers that serve the zone, and the hostnames of those that do not.
+// A nameserver serves the zone only if it answers authoritatively with the zone's own SOA:
+// a refusal, or an answer from another zone on the same host, means it does not. Nameservers
+// that cannot be resolved or do not respond are in neither list.
+func (c *delegationChecker) servingByHost(hosts []string, zone string) (served, notServing []string) {
+	for _, host := range hosts {
+		addresses := c.addresses([]string{host})
+		if len(addresses) == 0 {
+			continue
+		}
+		resp, err := c.ask(addresses[0], zone, dns.TypeSOA)
+		// a truncated reply that could not be retried says nothing either way
+		if err != nil || resp == nil || resp.Truncated {
 			continue
 		}
 		if resp.Rcode == dns.RcodeSuccess && resp.Authoritative && hasSOAFor(resp.Answer, zone) {
-			return servingYes
+			served = append(served, addresses[0])
+		} else {
+			notServing = append(notServing, host)
 		}
-		result = servingNo
 	}
-	return result
+	return served, notServing
 }
 
 func hasSOAFor(rrs []dns.RR, zone string) bool {
@@ -260,6 +281,33 @@ func (c *delegationChecker) askAny(servers []string, name string, qtype uint16) 
 		}
 	}
 	return nil
+}
+
+// partlyDanglingIssue reports zone as delegated to some nameservers that do not serve it,
+// alongside others that do. If those nameservers are on a provider where anyone can create
+// the zone, whoever does so answers the share of queries sent to them.
+func partlyDanglingIssue(fqdn, zone string, notServing []string) *issue {
+	nsList := strings.Join(notServing, ", ")
+	if p, ok := nsProvider(notServing); ok {
+		detail := zone + " is also delegated to " + p.platform + ", which does not serve it, so whoever creates the zone there answers a share of its queries"
+		if p.note != "" {
+			detail += " (" + p.note + ")"
+		}
+		return &issue{
+			kind:     "vuln",
+			platform: p.platform,
+			fqdn:     fqdn,
+			url:      fqdn,
+			err:      errors.Errorf("NS for %s include %s, which do not serve the zone, matches platform: %s", zone, nsList, p.platform),
+			detail:   detail,
+			edgeCase: p.edgeCase,
+		}
+	}
+	return &issue{
+		kind: "dns",
+		fqdn: fqdn,
+		err:  errors.Errorf("%s is a partly dangling delegation: %s is delegated to %s, which do not serve it, alongside nameservers that do", fqdn, zone, nsList),
+	}
 }
 
 // danglingDelegationIssue reports zone as delegated to nameservers that do not serve it. On
