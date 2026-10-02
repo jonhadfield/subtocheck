@@ -73,7 +73,7 @@ func checkResolves(fqdn string, log *scanLog) (issues issues, cnames []string) {
 		err = issues[len(issues)-1].err
 	} else if record.Rcode == dns.RcodeServerFailure || record.Rcode == dns.RcodeRefused {
 		// what a resolver returns for a name delegated to nameservers that do not serve it
-		if dangling := newDelegationChecker(log).check(fqdn); dangling != nil {
+		if dangling := delegations.check(fqdn, log); dangling != nil {
 			issues = append(issues, *dangling)
 			err = dangling.err
 		} else {
@@ -132,18 +132,27 @@ func danglingCNAMEIssue(fqdn, target string, registration registrationLookup) is
 	if domain == "" || domain == registeredDomain(fqdn) {
 		return notExist
 	}
-	finding := func(platform, detail string, edgeCase bool) issue {
-		return issue{
+	if i := registrationIssue(fqdn, "CNAME to "+target, domain, registration(domain)); i != nil {
+		return *i
+	}
+	return notExist
+}
+
+// registrationIssue reports that something fqdn depends on, described by subject, is on a
+// domain that anyone could register, or nil if the domain's status gives no such reason.
+func registrationIssue(fqdn, subject, domain string, status registrationStatus) *issue {
+	finding := func(platform, detail string, edgeCase bool) *issue {
+		return &issue{
 			kind:     "vuln",
 			platform: platform,
 			fqdn:     fqdn,
 			url:      fqdn,
-			err:      errors.Errorf("CNAME to %s: %s", target, detail),
-			detail:   "CNAME to " + target + "; " + detail,
+			err:      errors.Errorf("%s: %s", subject, detail),
+			detail:   subject + "; " + detail,
 			edgeCase: edgeCase,
 		}
 	}
-	switch registration(domain) {
+	switch status {
 	case statusUnregistered:
 		return finding("Unregistered domain", domain+" is not registered, so may be available to register", false)
 	case statusUnconfirmed:
@@ -151,7 +160,7 @@ func danglingCNAMEIssue(fqdn, target string, registration registrationLookup) is
 	case statusUndelegated:
 		return finding("Undelegated domain", domain+" is registered but has no nameservers, so its registration may have expired", true)
 	default:
-		return notExist
+		return nil
 	}
 }
 
@@ -420,7 +429,12 @@ func worker(id int, jobs <-chan string, results chan<- scanResult, log *scanLog)
 		log.debugf("worker %d: checking %s", id, domain)
 		found, cnames := checkResolves(domain, log)
 		if len(found) == 0 {
-			found = checkResponse(domain, cnames, protocols, log)
+			// a name that resolves can still be delegated to a nameserver on a domain anyone
+			// could register; names that fail to resolve are walked by checkResolves
+			if dangling := delegations.check(domain, log); dangling != nil {
+				found = append(found, *dangling)
+			}
+			found = append(found, checkResponse(domain, cnames, protocols, log)...)
 		}
 		results <- scanResult{domain: domain, issues: found}
 	}
