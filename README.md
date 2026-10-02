@@ -31,7 +31,17 @@ subtocheck performs these checks for each FQDN:
 - A request to the root of the domain over http and https
 - Test each response against a provider that no longer has a service configured
 
-If the name has a CNAME whose target does not exist (NXDOMAIN), the record is dangling. Where the target belongs to a provider that lets anyone register a deleted resource's name again, such as Azure App Service, that is reported as a potential vulnerability without any request being needed. For other dangling CNAMEs, subtocheck checks whether the target's domain is registered, using DNS and the registry's [RDAP](https://about.rdap.org/) service. If the registry has no record of it, anyone could register it and serve content for your name, so it is reported as a potential takeover. A domain that is registered but has no nameservers, as when a registration has expired, or one whose registry has no RDAP service, is reported to verify manually. Registries also report names they reserve as unregistered, though those cannot be bought. Dangling CNAMEs to a domain that is registered, or within your own domain, are reported as DNS issues.
+If the name has a CNAME whose target does not exist (NXDOMAIN), the record is dangling. Where the target belongs to a provider that lets anyone register a deleted resource's name again, such as Azure App Service, that is reported as a potential vulnerability without any request being needed. For other dangling CNAMEs, subtocheck checks whether the target's domain is registered, using DNS and the registry's [RDAP](https://about.rdap.org/) service, or its WHOIS server for registries without RDAP (such as `.io`, `.de` and `.jp`). If the registry has no record of it, anyone could register it and serve content for your name, so it is reported as a potential takeover. Registries also report names they reserve as unregistered, though those cannot be bought. A domain that is registered but has no nameservers is reported to verify manually, with how far through expiry the registry says it is, and its expiry date:
+
+| Registry status | Reported as |
+|---|---|
+| pending delete | Domain pending deletion: available to register within days |
+| redemption period | Domain in redemption: deleted and released unless the registrant restores it |
+| client or server hold | Domain on hold: registered but suspended |
+| auto renew period, or an expiry date in the past | Expired domain: in its renewal grace period |
+| none of these | Undelegated domain |
+
+A domain whose registry cannot confirm either way is also reported to verify manually. Dangling CNAMEs to a domain that is registered, or within your own domain, are reported as DNS issues.
 
 If resolvers fail to answer for the name (SERVFAIL or REFUSED), subtocheck follows its delegations from the top-level domain down, asking each zone's nameservers directly. A name delegated to nameservers that do not serve its zone, usually because the zone was deleted from the DNS host, is a dangling delegation. Where the host lets any account create a zone of that name, whoever does so controls every record under it, so it is reported as a potential takeover; otherwise it is reported as a DNS issue. The same walk runs for every name that resolves, to find nameservers whose hostname does not exist and whose domain is not registered. Whoever registers that domain answers a share of the queries for the zone, even if its other nameservers are healthy, so this is reported as a potential takeover. Only public DNS and registries' RDAP services are queried.
 

@@ -106,7 +106,7 @@ func cnameTargets(record *dns.Msg) (targets []string) {
 // danglingCNAMEIssue reports a CNAME whose target does not exist. It is a potential
 // vulnerability if the target belongs to a provider where deleted names can be registered
 // again, or if the target's own domain is not registered, so anyone could register it.
-func danglingCNAMEIssue(fqdn, target string, registration registrationLookup) issue {
+func danglingCNAMEIssue(fqdn, target string, lookup registrationLookup) issue {
 	for _, pattern := range cnamePatterns {
 		if hasSuffix(target, pattern.suffixes) {
 			return issue{
@@ -129,7 +129,7 @@ func danglingCNAMEIssue(fqdn, target string, registration registrationLookup) is
 	if domain == "" || domain == registeredDomain(fqdn) {
 		return notExist
 	}
-	if i := registrationIssue(fqdn, "CNAME to "+target, domain, registration(domain)); i != nil {
+	if i := registrationIssue(fqdn, "CNAME to "+target, domain, lookup(domain), time.Now()); i != nil {
 		return *i
 	}
 	return notExist
@@ -137,7 +137,7 @@ func danglingCNAMEIssue(fqdn, target string, registration registrationLookup) is
 
 // registrationIssue reports that something fqdn depends on, described by subject, is on a
 // domain that anyone could register, or nil if the domain's status gives no such reason.
-func registrationIssue(fqdn, subject, domain string, status registrationStatus) *issue {
+func registrationIssue(fqdn, subject, domain string, reg registration, now time.Time) *issue {
 	finding := func(platform, detail string, edgeCase bool) *issue {
 		return &issue{
 			kind:     "vuln",
@@ -149,16 +149,45 @@ func registrationIssue(fqdn, subject, domain string, status registrationStatus) 
 			edgeCase: edgeCase,
 		}
 	}
-	switch status {
+	switch reg.status {
 	case statusUnregistered:
 		return finding("Unregistered domain", domain+" is not registered, so may be available to register", false)
 	case statusUnconfirmed:
-		return finding("Unregistered domain", domain+" has no DNS and its registry has no RDAP service to confirm whether it is registered", true)
+		return finding("Unregistered domain", domain+" has no DNS and its registry could not confirm whether it is registered", true)
 	case statusUndelegated:
-		return finding("Undelegated domain", domain+" is registered but has no nameservers, so its registration may have expired", true)
+		platform, detail := lifecycle(domain, reg, now)
+		return finding(platform, detail, true)
 	default:
 		return nil
 	}
+}
+
+// lifecycle describes how far a registered domain without nameservers is through expiry,
+// from the registry's status values and expiry date, most advanced stage first.
+func lifecycle(domain string, reg registration, now time.Time) (platform, detail string) {
+	expired := !reg.expires.IsZero() && reg.expires.Before(now)
+	switch {
+	case reg.has("pending delete"):
+		platform, detail = "Domain pending deletion", domain+" is pending deletion, so will be available to register within days"
+	case reg.has("redemption period"):
+		platform, detail = "Domain in redemption", domain+" is in its redemption period: unless the registrant restores it, it will be deleted and available to register"
+	case reg.has("client hold") || reg.has("server hold"):
+		platform, detail = "Domain on hold", domain+" is registered but on hold, so it does not resolve"
+	case reg.has("auto renew period") || expired:
+		platform, detail = "Expired domain", domain+" has expired and is in its renewal grace period"
+	default:
+		platform, detail = "Undelegated domain", domain+" is registered but has no nameservers"
+		if reg.expires.IsZero() {
+			detail += ", so its registration may have expired"
+		}
+	}
+	switch {
+	case expired:
+		detail += " (expired " + reg.expires.Format("2006-01-02") + ")"
+	case !reg.expires.IsZero():
+		detail += " (expires " + reg.expires.Format("2006-01-02") + ")"
+	}
+	return platform, detail
 }
 
 // hasSuffix reports whether host is, or is a subdomain of, any of the domains.

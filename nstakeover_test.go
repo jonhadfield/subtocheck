@@ -29,7 +29,7 @@ func (f fakeDNS) checker() *delegationChecker {
 		resolve: func(name string, qtype uint16) (*dns.Msg, error) { return lookup(key("resolver", name, qtype)) },
 		ask:     func(ip, name string, qtype uint16) (*dns.Msg, error) { return lookup(key(ip, name, qtype)) },
 		// tests that look up a registration script their own
-		registration: func(string) registrationStatus { return statusDelegated },
+		registration: func(string) registration { return registration{status: statusDelegated} },
 	}
 }
 
@@ -206,9 +206,9 @@ func TestNameserverOnUnregisteredDomain(t *testing.T) {
 	f.nxdomain("ns2.expired-dns.test")
 	c := f.checker()
 	var looked []string
-	c.registration = func(domain string) registrationStatus {
+	c.registration = func(domain string) registration {
 		looked = append(looked, domain)
-		return statusUnregistered
+		return registration{status: statusUnregistered}
 	}
 	got := c.check("app.sub.example.com", nil)
 	if got == nil || got.kind != "vuln" || got.platform != "Unregistered domain" || got.edgeCase {
@@ -228,9 +228,9 @@ func TestNameserverWithinTheZoneIsNotLookedUp(t *testing.T) {
 	f.referral("192.0.2.2", "sub.example.com", "ns1.sub.example.com")
 	f.nxdomain("ns1.sub.example.com")
 	c := f.checker()
-	c.registration = func(domain string) registrationStatus {
+	c.registration = func(domain string) registration {
 		t.Errorf("a nameserver in the zone's own domain should not be looked up, got %s", domain)
-		return statusUnregistered
+		return registration{status: statusUnregistered}
 	}
 	if got := c.check("app.sub.example.com", nil); got != nil && got.platform == "Unregistered domain" {
 		t.Errorf("expected no registration finding, got %+v", got)
@@ -243,7 +243,7 @@ func TestRegisteredDomainWithNameserverOnExpiredDomain(t *testing.T) {
 	f.nxdomain("ns1.gone-dns.test")
 	f.nxdomain("ns2.gone-dns.test")
 	c := f.checker()
-	c.registration = func(string) registrationStatus { return statusUndelegated }
+	c.registration = func(string) registration { return registration{status: statusUndelegated} }
 	got := c.check("www.example.com", nil)
 	if got == nil || got.platform != "Undelegated domain" || !got.edgeCase || !strings.Contains(got.detail, "example.com is delegated to nameserver ns1.gone-dns.test") {
 		t.Fatalf("expected an undelegated domain edge case, got %+v", got)

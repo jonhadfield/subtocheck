@@ -2,7 +2,9 @@ package subtocheck
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -23,28 +25,43 @@ const (
 	// statusDelegated: the domain has nameservers, so it is registered
 	statusDelegated
 	// statusUndelegated: the registry has a record of the domain but it has no
-	// nameservers, as when a registration has expired
+	// nameservers, as when a registration has expired; the registration's states and
+	// expiry say how far through expiry it is
 	statusUndelegated
 	// statusUnregistered: the domain has no nameservers and the registry has no record of it
 	statusUnregistered
-	// statusUnconfirmed: the domain has no nameservers and its registry has no RDAP
-	// service to confirm whether it is registered
+	// statusUnconfirmed: the domain has no nameservers and its registry could not confirm
+	// whether it is registered, through RDAP or WHOIS
 	statusUnconfirmed
 )
 
-// registrationLookup reports the registration status of a registered domain, such as
-// example.com.
-type registrationLookup func(domain string) registrationStatus
+// registration is what a registry says about a domain.
+type registration struct {
+	status registrationStatus
+	// states are the registry's status values, in RDAP's lower case form, such as
+	// "redemption period", "pending delete" or "client hold"
+	states  []string
+	expires time.Time
+}
+
+func (r registration) has(state string) bool {
+	return slices.Contains(r.states, state)
+}
+
+// registrationLookup reports the registration of a registered domain, such as example.com.
+type registrationLookup func(domain string) registration
 
 // registrationChecker looks domains up in DNS and, if they have no nameservers, in their
-// registry's RDAP service. Results are cached, as many names can point at one domain.
+// registry's RDAP service, or WHOIS for registries without one. Results are cached, as many
+// names can point at one domain.
 type registrationChecker struct {
 	resolve   func(name string, qtype uint16) (*dns.Msg, error)
 	rdapBases func() map[string]string // RDAP base URL by top-level domain
 	client    *http.Client
+	whois     func(domain string) (string, bool) // a registry's WHOIS reply, if it has a server
 
 	mu    sync.Mutex
-	cache map[string]registrationStatus
+	cache map[string]registration
 }
 
 func newRegistrationChecker() *registrationChecker {
@@ -53,7 +70,8 @@ func newRegistrationChecker() *registrationChecker {
 		resolve:   queries.resolve,
 		rdapBases: sync.OnceValue(func() map[string]string { return fetchRDAPBootstrap(client, rdapBootstrapURL) }),
 		client:    client,
-		cache:     map[string]registrationStatus{},
+		whois:     newWhoisClient().lookup,
+		cache:     map[string]registration{},
 	}
 }
 
@@ -61,7 +79,7 @@ func newRegistrationChecker() *registrationChecker {
 // looked up once.
 var registrations = newRegistrationChecker()
 
-func (r *registrationChecker) status(domain string) registrationStatus {
+func (r *registrationChecker) status(domain string) registration {
 	r.mu.Lock()
 	if s, ok := r.cache[domain]; ok {
 		r.mu.Unlock()
@@ -76,40 +94,67 @@ func (r *registrationChecker) status(domain string) registrationStatus {
 	return s
 }
 
-func (r *registrationChecker) lookup(domain string) registrationStatus {
+func (r *registrationChecker) lookup(domain string) registration {
 	resp, err := r.resolve(domain, dns.TypeNS)
 	if err != nil || resp == nil {
-		return statusUnknown
+		return registration{status: statusUnknown}
 	}
 	if resp.Rcode == dns.RcodeSuccess {
-		return statusDelegated
+		return registration{status: statusDelegated}
 	}
 	if resp.Rcode != dns.RcodeNameError {
-		return statusUnknown
+		return registration{status: statusUnknown}
 	}
 	tld := domain[strings.LastIndex(domain, ".")+1:]
-	base, ok := r.rdapBases()[tld]
-	if !ok {
-		return statusUnconfirmed
+	if base, ok := r.rdapBases()[tld]; ok {
+		return r.rdap(base, domain)
 	}
+	if reply, ok := r.whois(domain); ok {
+		return parseWhois(domain, reply)
+	}
+	return registration{status: statusUnconfirmed}
+}
+
+// rdap asks a registry's RDAP service about a domain.
+func (r *registrationChecker) rdap(base, domain string) registration {
+	unconfirmed := registration{status: statusUnconfirmed}
 	req, err := http.NewRequest(http.MethodGet, strings.TrimSuffix(base, "/")+"/domain/"+domain, nil)
 	if err != nil {
-		return statusUnconfirmed
+		return unconfirmed
 	}
 	req.Header.Set("Accept", "application/rdap+json")
 	req.Header.Set("User-Agent", "subtocheck")
-	rdapResp, err := r.client.Do(req)
+	resp, err := r.client.Do(req)
 	if err != nil {
-		return statusUnconfirmed
+		return unconfirmed
 	}
-	_ = rdapResp.Body.Close()
-	switch rdapResp.StatusCode {
-	case http.StatusOK:
-		return statusUndelegated
+	defer func() { _ = resp.Body.Close() }()
+	switch resp.StatusCode {
 	case http.StatusNotFound:
-		return statusUnregistered
+		return registration{status: statusUnregistered}
+	case http.StatusOK:
+		var record struct {
+			Status []string `json:"status"`
+			Events []struct {
+				Action string `json:"eventAction"`
+				Date   string `json:"eventDate"`
+			} `json:"events"`
+		}
+		found := registration{status: statusUndelegated}
+		// a record that cannot be parsed still shows the domain is registered
+		if json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&record) == nil {
+			for _, state := range record.Status {
+				found.states = append(found.states, strings.ToLower(state))
+			}
+			for _, e := range record.Events {
+				if e.Action == "expiration" {
+					found.expires, _ = time.Parse(time.RFC3339, e.Date)
+				}
+			}
+		}
+		return found
 	default:
-		return statusUnconfirmed
+		return unconfirmed
 	}
 }
 
