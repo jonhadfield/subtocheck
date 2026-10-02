@@ -9,7 +9,9 @@ import "regexp"
 //     claimable. Only services it rates "Vulnerable" are included, plus a few popular ones it
 //     rates "Edge case", which are marked as such and reported as needing manual verification.
 //   - https://github.com/projectdiscovery/nuclei-templates (http/takeovers): where a template
-//     exists its matchers are used, as they are stricter than the single phrases above.
+//     exists its matchers are used, as they are stricter than the single phrases above. A
+//     few services only it lists are included where the page was confirmed live: Framer,
+//     GitBook, Leadpages, UserVoice, Wasabi and Wufoo.
 //   - https://learn.microsoft.com/en-us/azure/security/fundamentals/subdomain-takeover: the
 //     Azure services whose names can be re-registered once a resource is deleted.
 
@@ -109,6 +111,12 @@ var vPatterns = []vPattern{
 		redirectStrings: []string{"gemfury.com/404"},
 	},
 	{
+		// verified live October 2026
+		platform:        "Framer",
+		bodyStrings:     []string{"Site Not Found | Framer"},
+		bodyStringMatch: "all",
+	},
+	{
 		// verified live September 2026: unknown hosts redirect to /lpc_not_found.html
 		platform:        "GetResponse",
 		redirectStrings: []string{"/lpc_not_found.html"},
@@ -127,6 +135,14 @@ var vPatterns = []vPattern{
 	{
 		platform:        "Ghost",
 		redirectStrings: []string{"error.ghost.org", "offline.ghost.org"},
+	},
+	{
+		// verified live October 2026, through an unclaimed gitbook.io subdomain only, so a
+		// CNAME to GitBook is required
+		platform:        "GitBook",
+		cnames:          []string{"gitbook.io"},
+		bodyStrings:     []string{"Content owner not found"},
+		bodyStringMatch: "all",
 	},
 	{
 		platform: "GitHub Pages",
@@ -170,6 +186,16 @@ var vPatterns = []vPattern{
 		platform:        "JetBrains YouTrack",
 		bodyStrings:     []string{"is not a registered InCloud YouTrack."},
 		bodyStringMatch: "all",
+	},
+	{
+		// verified live October 2026
+		platform: "Leadpages",
+		bodyStrings: []string{
+			"This page couldn't be found, so let's get you turned around!",
+			"The page you're looking for may have moved.",
+			"Double check that you have the right web address and give it another go!",
+		},
+		bodyStringMatch: "any",
 	},
 	{
 		platform:        "LaunchRock",
@@ -226,8 +252,9 @@ var vPatterns = []vPattern{
 		responseCodes:   []int{404},
 		bodyStrings:     []string{"The specified bucket does not exist", "BucketName"},
 		bodyStringMatch: "all",
-		// Google Cloud Storage and Alibaba OSS return similar errors but verify domain ownership
-		notHeaderStrings: []string{"x-guploader-uploadid", "aliyunoss"},
+		// Google Cloud Storage and Alibaba OSS return similar errors but verify domain
+		// ownership; Wasabi's are reported as Wasabi
+		notHeaderStrings: []string{"x-guploader-uploadid", "aliyunoss", "server: wasabis3"},
 	},
 	{
 		platform: "Short.io",
@@ -277,6 +304,14 @@ var vPatterns = []vPattern{
 		bodyStringMatch: "all",
 	},
 	{
+		// verified live October 2026, through an unclaimed uservoice.com subdomain only, so a
+		// CNAME to UserVoice is required
+		platform:        "UserVoice",
+		cnames:          []string{"uservoice.com"},
+		bodyStrings:     []string{"This UserVoice instance does not exist."},
+		bodyStringMatch: "all",
+	},
+	{
 		platform: "Uberflip",
 		// verified live September 2026
 		bodyStrings:     []string{"Non-hub domain", "The URL you've accessed does not provide a hub."},
@@ -291,10 +326,26 @@ var vPatterns = []vPattern{
 		headerStrings:   []string{"server: caddy"},
 	},
 	{
+		// verified live October 2026: an S3 compatible error, told apart by its server
+		platform:        "Wasabi",
+		responseCodes:   []int{404},
+		bodyStrings:     []string{"The specified bucket does not exist", "BucketName"},
+		bodyStringMatch: "all",
+		headerStrings:   []string{"server: wasabis3"},
+	},
+	{
 		platform:        "Wix",
 		edgeCase:        true,
 		responseCodes:   []int{404},
 		bodyStrings:     []string{"ConnectYourDomain Error | Wix.com"},
+		bodyStringMatch: "all",
+	},
+	{
+		// verified live October 2026, through an unclaimed wufoo.com subdomain only, so a
+		// CNAME to Wufoo is required
+		platform:        "Wufoo",
+		cnames:          []string{"wufoo.com"},
+		bodyStrings:     []string{"This content doesn't exist.", "Create a form for free!"},
 		bodyStringMatch: "all",
 	},
 	{
