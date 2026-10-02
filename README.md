@@ -55,7 +55,7 @@ If the response (over http and/or https) can be retrieved, then check the built-
 
 #### providers checked
 
-Providers and fingerprints are based on [can-i-take-over-xyz](https://github.com/EdOverflow/can-i-take-over-xyz), the [nuclei takeover templates](https://github.com/projectdiscovery/nuclei-templates/tree/main/http/takeovers) and Microsoft's [dangling DNS guidance](https://learn.microsoft.com/en-us/azure/security/fundamentals/subdomain-takeover). Fingerprints marked ✓ were confirmed against the live provider in September 2026.
+Providers and fingerprints are based on [can-i-take-over-xyz](https://github.com/EdOverflow/can-i-take-over-xyz), the [nuclei takeover templates](https://github.com/projectdiscovery/nuclei-templates/tree/main/http/takeovers) and Microsoft's [dangling DNS guidance](https://learn.microsoft.com/en-us/azure/security/fundamentals/subdomain-takeover). Fingerprints marked ✓ are confirmed against the live provider every week by the `live checks` workflow; the rest could not be checked automatically, as the provider blocks such requests or has no page to probe.
 
 Dangling CNAME to:
 - AWS Elastic Beanstalk
@@ -71,19 +71,19 @@ Response fingerprint:
 
 | | | |
 |---|---|---|
-| Agile CRM | Airee.ru | Anima |
-| Azure Front Door | Bitbucket | Campaign Monitor ✓ |
-| Canny ✓ | Cargo Collective | Gemfury |
-| GetResponse ✓ | Ghost ✓ | HatenaBlog |
-| Help Juice | Help Scout | Helprace |
-| JetBrains YouTrack | LaunchRock | Ngrok |
-| Pantheon | Pingdom ✓ | Readme.io |
+| Agile CRM | Airee.ru ✓ | Anima ✓ |
+| Azure Front Door ✓ | Bitbucket ✓ | Campaign Monitor ✓ |
+| Canny ✓ | Cargo Collective | Gemfury ✓ |
+| GetResponse ✓ | Ghost ✓ | HatenaBlog ✓ |
+| Help Juice ✓ | Help Scout ✓ | Helprace |
+| JetBrains YouTrack | LaunchRock ✓ | Ngrok ✓ |
+| Pantheon ✓ | Pingdom ✓ | Readme.io |
 | Read the Docs | S3 ✓ | Short.io ✓ |
 | SmartJobBoard ✓ | SmugMug | Strikingly |
 | Surge.sh ✓ | SurveySparrow | Uberflip ✓ |
-| UptimeRobot | WordPress.com | Worksites |
+| UptimeRobot | WordPress.com ✓ |  |
 
-Edge cases, reported with a note to verify manually, as takeover depends on conditions such as the provider's domain verification: GitHub Pages ✓, Heroku ✓, Tilda ✓, Tumblr ✓, Wix.
+Edge cases, reported with a note to verify manually, as takeover depends on conditions such as the provider's domain verification: GitHub Pages ✓, Heroku ✓, Tilda ✓, Tumblr ✓, Wix. The current Azure Front Door and Ngrok pages are also reported to verify manually: Front Door validates custom domains, and Ngrok shows the same page when a configured endpoint is simply offline.
 
 ## <a name="install-and-run"></a>install and run
 
