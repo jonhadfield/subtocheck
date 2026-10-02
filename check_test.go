@@ -153,7 +153,7 @@ func TestDanglingCNAME(t *testing.T) {
 		{"gone.example.org", "dns", ""},
 	}
 	for _, c := range cases {
-		got := danglingCNAMEIssue("app.example.com", c.target, func(string) registrationStatus { return statusDelegated })
+		got := danglingCNAMEIssue("app.example.com", c.target, func(string) registration { return registration{status: statusDelegated} })
 		if got.kind != c.kind || got.platform != c.platform {
 			t.Errorf("%s: expected %s/%q, got %s/%q", c.target, c.kind, c.platform, got.kind, got.platform)
 		}

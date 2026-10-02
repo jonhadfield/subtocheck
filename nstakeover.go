@@ -156,7 +156,7 @@ func (c *delegationChecker) unregisteredNameserver(fqdn, zone string, delegated 
 			continue
 		}
 		subject := zone + " is delegated to nameserver " + host
-		if i := registrationIssue(fqdn, subject, domain, c.registration(domain)); i != nil {
+		if i := registrationIssue(fqdn, subject, domain, c.registration(domain), time.Now()); i != nil {
 			return i
 		}
 	}
