@@ -298,7 +298,7 @@ var vPatterns = []vPattern{
 		bodyStringMatch: "all",
 	},
 	{
-		platform:        "WordPress.com",
+		platform: "WordPress.com",
 		// the apostrophe in "doesn't exist" has been encoded both as &#8217; and, by
 		// October 2026, &apos;
 		bodyStrings:     []string{"Do you want to register", ".wordpress.com</em> doesn"},
