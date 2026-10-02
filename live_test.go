@@ -26,23 +26,41 @@ import (
 // answers a dangling custom domain.
 const unclaimedHost = "subtocheck-live-check-7f3k2.example.com"
 
-// liveFingerprints lists, for each fingerprint confirmed against its provider, an endpoint
-// that serves the provider's page for hosts it does not know.
-var liveFingerprints = []struct{ platform, endpoint string }{
-	{"Campaign Monitor", "cname.createsend.com"},
-	{"Canny", "cname.canny.io"},
-	{"GetResponse", "getresponsepages.com"},
-	{"Ghost", "ghost.io"},
-	{"GitHub Pages", "github.io"},
-	{"Heroku", "herokuapp.com"},
-	{"Pingdom", "stats.pingdom.com"},
-	{"S3", "s3.amazonaws.com"},
-	{"Short.io", "cname.short.io"},
-	{"SmartJobBoard", "52.16.160.97"},
-	{"Surge.sh", "na-west1.surge.sh"},
-	{"Tilda", "tilda.ws"},
-	{"Tumblr", "domains.tumblr.com"},
-	{"Uberflip", "read.uberflip.com"},
+// unclaimedLabel is a subdomain label no account has claimed. It has only letters and
+// digits, as some platforms, such as WordPress.com, reject other site names.
+const unclaimedLabel = "subtocheckunclaimed7f3k2"
+
+// liveFingerprints lists each fingerprint confirmed against its provider, with how to see
+// the provider's page for a name nobody has configured: either an endpoint, sent a host it
+// does not know (as a dangling custom domain would be), or a domain whose unclaimed
+// subdomains show the same page.
+var liveFingerprints = []struct{ platform, endpoint, subdomainOf string }{
+	{platform: "Airee.ru", subdomainOf: "airee.ru"},
+	{platform: "Anima", subdomainOf: "animaapp.io"},
+	{platform: "Azure Front Door", endpoint: "star-azurefd-prod.trafficmanager.net"},
+	{platform: "Bitbucket", subdomainOf: "bitbucket.io"},
+	{platform: "Campaign Monitor", endpoint: "cname.createsend.com"},
+	{platform: "Canny", endpoint: "cname.canny.io"},
+	{platform: "Gemfury", subdomainOf: "fury.site"},
+	{platform: "GetResponse", endpoint: "getresponsepages.com"},
+	{platform: "Ghost", endpoint: "ghost.io"},
+	{platform: "GitHub Pages", endpoint: "github.io"},
+	{platform: "HatenaBlog", subdomainOf: "hatenablog.com"},
+	{platform: "Help Juice", subdomainOf: "helpjuice.com"},
+	{platform: "Help Scout", subdomainOf: "helpscoutdocs.com"},
+	{platform: "Heroku", endpoint: "herokuapp.com"},
+	{platform: "LaunchRock", subdomainOf: "launchrock.com"},
+	{platform: "Ngrok", subdomainOf: "ngrok.io"},
+	{platform: "Pantheon", endpoint: "23.185.0.1"},
+	{platform: "Pingdom", endpoint: "stats.pingdom.com"},
+	{platform: "S3", endpoint: "s3.amazonaws.com"},
+	{platform: "Short.io", endpoint: "cname.short.io"},
+	{platform: "SmartJobBoard", endpoint: "52.16.160.97"},
+	{platform: "Surge.sh", endpoint: "na-west1.surge.sh"},
+	{platform: "Tilda", endpoint: "tilda.ws"},
+	{platform: "Tumblr", endpoint: "domains.tumblr.com"},
+	{platform: "Uberflip", endpoint: "read.uberflip.com"},
+	{platform: "WordPress.com", subdomainOf: "wordpress.com"},
 }
 
 func TestLiveFingerprints(t *testing.T) {
@@ -52,7 +70,13 @@ func TestLiveFingerprints(t *testing.T) {
 			var results []string
 			blocked := true
 			for _, scheme := range []string{"https", "http"} {
-				platform, status, summary := probe(scheme, f.endpoint)
+				var platform, summary string
+				var status int
+				if f.subdomainOf != "" {
+					platform, status, summary = probeSubdomain(scheme, f.subdomainOf)
+				} else {
+					platform, status, summary = probe(scheme, f.endpoint)
+				}
 				if platform == f.platform {
 					return
 				}
@@ -64,7 +88,7 @@ func TestLiveFingerprints(t *testing.T) {
 				// some providers refuse requests from hosting networks, such as CI runners
 				t.Skipf("%s refused the request, so its fingerprint could not be checked from this network:\n  %s", f.platform, details)
 			}
-			t.Errorf("%s no longer matches its fingerprint via %s:\n  %s", f.platform, f.endpoint, details)
+			t.Errorf("%s no longer matches its fingerprint via %s%s:\n  %s", f.platform, f.endpoint, f.subdomainOf, details)
 		})
 	}
 }
@@ -85,20 +109,32 @@ func blockingStatus(status int) bool {
 // probe requests unclaimedHost from endpoint and returns the platform it matches, if any,
 // the HTTP status, and a summary of the response for diagnosing a mismatch.
 func probe(scheme, endpoint string) (string, int, string) {
-	var redirects []string
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
-	client := &http.Client{
-		Timeout: 20 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true, ServerName: unclaimedHost},
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				// send the unclaimed host to the endpoint; redirects elsewhere resolve normally
-				if host, port, _ := net.SplitHostPort(addr); host == unclaimedHost {
-					addr = net.JoinHostPort(endpoint, port)
-				}
-				return dialer.DialContext(ctx, network, addr)
-			},
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true, ServerName: unclaimedHost},
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			// send the unclaimed host to the endpoint; redirects elsewhere resolve normally
+			if host, port, _ := net.SplitHostPort(addr); host == unclaimedHost {
+				addr = net.JoinHostPort(endpoint, port)
+			}
+			return dialer.DialContext(ctx, network, addr)
 		},
+	}
+	return request(transport, scheme+"://"+unclaimedHost+"/", []string{"x." + endpoint, endpoint})
+}
+
+// probeSubdomain requests an unclaimed subdomain of domain, resolved normally.
+func probeSubdomain(scheme, domain string) (string, int, string) {
+	host := unclaimedLabel + "." + domain
+	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	return request(transport, scheme+"://"+host+"/", []string{host})
+}
+
+func request(transport *http.Transport, url string, cnames []string) (string, int, string) {
+	var redirects []string
+	client := &http.Client{
+		Timeout:   20 * time.Second,
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			redirects = append(redirects, req.URL.String())
 			if len(via) >= 5 {
@@ -107,11 +143,11 @@ func probe(scheme, endpoint string) (string, int, string) {
 			return nil
 		},
 	}
-	resp, err := client.Get(scheme + "://" + unclaimedHost + "/")
+	resp, err := client.Get(url)
 	if err != nil {
 		return "", 0, "error: " + err.Error()
 	}
-	got := checkVulnerable(scheme+"://"+unclaimedHost, resp, []string{"x." + endpoint, endpoint}, redirects)
+	got := checkVulnerable(url, resp, cnames, redirects)
 	if got.platform != "" {
 		return got.platform, resp.StatusCode, resp.Status
 	}

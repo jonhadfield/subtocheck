@@ -50,8 +50,24 @@ var vPatterns = []vPattern{
 		bodyStringMatch: "all",
 	},
 	{
+		// verified live October 2026
+		platform:        "Anima",
+		bodyStrings:     []string{"Anima - Page Not Found", "The page you were looking for does not exist."},
+		bodyStringMatch: "all",
+	},
+	{
 		platform:        "Anima",
 		bodyStrings:     []string{"If this is your website and you've just created it, try refreshing in a minute"},
+		bodyStringMatch: "all",
+	},
+	{
+		// verified live October 2026. A request reaches this page only through an endpoint
+		// that still exists, and Front Door validates custom domains, so takeover is not
+		// assured.
+		platform:        "Azure Front Door",
+		edgeCase:        true,
+		responseCodes:   []int{404},
+		bodyStrings:     []string{"able to find your Azure Front Door Service"},
 		bodyStringMatch: "all",
 	},
 	{
@@ -162,8 +178,23 @@ var vPatterns = []vPattern{
 		bodyStringMatch: "all",
 	},
 	{
+		// verified live October 2026. Also shown when a configured endpoint's agent is just
+		// not running, so takeover is not assured.
+		platform:        "Ngrok",
+		edgeCase:        true,
+		bodyStrings:     []string{"ERR_NGROK_3200", "is offline"},
+		bodyStringMatch: "all",
+	},
+	{
 		platform:        "Ngrok",
 		bodyStrings:     []string{"ngrok.io not found"},
+		bodyStringMatch: "all",
+	},
+	{
+		// verified live October 2026
+		platform:        "Pantheon",
+		responseCodes:   []int{404},
+		bodyStrings:     []string{"404 - Unknown site", "The page could not be loaded properly."},
 		bodyStringMatch: "all",
 	},
 	{
@@ -268,15 +299,11 @@ var vPatterns = []vPattern{
 	},
 	{
 		platform:        "WordPress.com",
-		bodyStrings:     []string{"Do you want to register", ".wordpress.com</em> doesn&#8217;t&nbsp;exist"},
+		// the apostrophe in "doesn't exist" has been encoded both as &#8217; and, by
+		// October 2026, &apos;
+		bodyStrings:     []string{"Do you want to register", ".wordpress.com</em> doesn"},
 		bodyStringMatch: "all",
 		notBodyStrings:  []string{"cannot be registered"},
-	},
-	{
-		platform:        "Worksites",
-		responseCodes:   []int{404},
-		bodyStrings:     []string{"Company Not Found", "worksites.net"},
-		bodyStringMatch: "all",
 	},
 }
 
