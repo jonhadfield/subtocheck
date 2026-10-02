@@ -34,9 +34,27 @@ jobs:
         with:
           go-version-file: go.mod
       - name: live checks
+        # bash, rather than the default shell, sets pipefail, so a failing check is not
+        # hidden by tee
+        shell: bash
         run: go test -tags live -run TestLive -count=1 -v -timeout 600s . 2>&1 | tee live.txt
+      - name: summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### Live checks"
+            echo
+            echo "$(grep -c -- '--- PASS' live.txt) passed, $(grep -c -- '--- FAIL' live.txt) failed, $(grep -c -- '--- SKIP' live.txt) skipped"
+            if grep -q -- '--- SKIP' live.txt; then
+              echo
+              echo "Skipped, as the provider refused requests from this network:"
+              grep -- '--- SKIP' live.txt | sed -E 's/^ *--- SKIP: /- /; s/ \(.*//'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: report failure
         if: failure() && github.event_name != 'pull_request'
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

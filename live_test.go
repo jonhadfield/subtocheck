@@ -50,21 +50,34 @@ func TestLiveFingerprints(t *testing.T) {
 		t.Run(f.platform, func(t *testing.T) {
 			t.Parallel()
 			var results []string
+			blocked := true
 			for _, scheme := range []string{"https", "http"} {
-				platform, summary := probe(scheme, f.endpoint)
+				platform, status, summary := probe(scheme, f.endpoint)
 				if platform == f.platform {
 					return
 				}
+				blocked = blocked && blockingStatus(status)
 				results = append(results, scheme+": "+summary)
 			}
-			t.Errorf("%s no longer matches its fingerprint via %s:\n  %s", f.platform, f.endpoint, strings.Join(results, "\n  "))
+			details := strings.Join(results, "\n  ")
+			if blocked {
+				// some providers refuse requests from hosting networks, such as CI runners
+				t.Skipf("%s refused the request, so its fingerprint could not be checked from this network:\n  %s", f.platform, details)
+			}
+			t.Errorf("%s no longer matches its fingerprint via %s:\n  %s", f.platform, f.endpoint, details)
 		})
 	}
 }
 
+// blockingStatus reports whether an HTTP status means the request was refused, rather than
+// answered with the provider's page.
+func blockingStatus(status int) bool {
+	return status == http.StatusForbidden || status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable
+}
+
 // probe requests unclaimedHost from endpoint and returns the platform it matches, if any,
-// and a summary of the response for diagnosing a mismatch.
-func probe(scheme, endpoint string) (string, string) {
+// the HTTP status, and a summary of the response for diagnosing a mismatch.
+func probe(scheme, endpoint string) (string, int, string) {
 	var redirects []string
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	client := &http.Client{
@@ -89,14 +102,13 @@ func probe(scheme, endpoint string) (string, string) {
 	}
 	resp, err := client.Get(scheme + "://" + unclaimedHost + "/")
 	if err != nil {
-		return "", "error: " + err.Error()
+		return "", 0, "error: " + err.Error()
 	}
-	status := resp.Status
 	got := checkVulnerable(scheme+"://"+unclaimedHost, resp, []string{"x." + endpoint, endpoint}, redirects)
 	if got.platform != "" {
-		return got.platform, status
+		return got.platform, resp.StatusCode, resp.Status
 	}
-	return "", status + ", no fingerprint matched"
+	return "", resp.StatusCode, resp.Status + ", no fingerprint matched"
 }
 
 // liveDNSHosts lists, for each DNS host subtocheck identifies, one of its nameservers and
