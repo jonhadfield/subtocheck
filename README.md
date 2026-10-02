@@ -73,15 +73,17 @@ Response fingerprint:
 |---|---|---|
 | Agile CRM | Airee.ru ✓ | Anima ✓ |
 | Azure Front Door ✓ | Bitbucket ✓ | Campaign Monitor ✓ |
-| Canny ✓ | Cargo Collective | Gemfury ✓ |
-| GetResponse ✓ | Ghost ✓ | HatenaBlog ✓ |
-| Help Juice ✓ | Help Scout ✓ | Helprace |
-| JetBrains YouTrack | LaunchRock ✓ | Ngrok ✓ |
+| Canny ✓ | Cargo Collective ✓ | Framer ✓ |
+| Gemfury ✓ | GetResponse ✓ | Ghost ✓ |
+| GitBook ✓ | HatenaBlog ✓ | Help Juice ✓ |
+| Help Scout ✓ | Helprace | JetBrains YouTrack |
+| LaunchRock ✓ | Leadpages ✓ | Ngrok ✓ |
 | Pantheon ✓ | Pingdom ✓ | Readme.io |
 | Read the Docs | S3 ✓ | Short.io ✓ |
 | SmartJobBoard ✓ | SmugMug | Strikingly |
 | Surge.sh ✓ | SurveySparrow | Uberflip ✓ |
-| UptimeRobot | WordPress.com ✓ |  |
+| UptimeRobot | UserVoice ✓ | Wasabi ✓ |
+| WordPress.com ✓ | Wufoo ✓ |  |
 
 Edge cases, reported with a note to verify manually, as takeover depends on conditions such as the provider's domain verification: GitHub Pages ✓, Heroku ✓, Tilda ✓, Tumblr ✓, Wix. The current Azure Front Door and Ngrok pages are also reported to verify manually: Front Door validates custom domains, and Ngrok shows the same page when a configured endpoint is simply offline.
 

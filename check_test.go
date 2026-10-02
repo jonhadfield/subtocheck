@@ -173,3 +173,14 @@ func TestCNAMETargets(t *testing.T) {
 		t.Errorf("expected %v, got %v", want, got)
 	}
 }
+
+func TestWasabiIsNotReportedAsS3(t *testing.T) {
+	body := "<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message><BucketName>assets.example.com</BucketName></Error>"
+	wasabi := http.Header{"Server": []string{"WasabiS3/8.1.333"}}
+	if got := checkVulnerable("https://assets.example.com", newResponse(404, body, wasabi), nil, nil); got.platform != "Wasabi" {
+		t.Errorf("expected Wasabi, got %q", got.platform)
+	}
+	if got := checkVulnerable("https://assets.example.com", newResponse(404, body, http.Header{"Server": []string{"AmazonS3"}}), nil, nil); got.platform != "S3" {
+		t.Errorf("expected S3, got %q", got.platform)
+	}
+}
