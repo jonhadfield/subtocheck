@@ -141,6 +141,7 @@ Options:
 | `--quiet` | no console output; the log file is still written |
 | `--debug` | also write debug messages to the log file |
 | `--config <path>` | email configuration (see below) |
+| `--workers <n>` | domains checked at once (default 10); more are faster, but busy hosts time out more often, and a timed-out request is a check not made |
 
 When the output is not a terminal, for example piped or run from cron, the progress bar and colours are left out. Colour can also be turned off with `NO_COLOR=1`.
 
