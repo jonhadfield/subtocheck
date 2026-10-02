@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -57,7 +56,7 @@ func checkResolves(fqdn string, log *scanLog) (issues issues, cnames []string) {
 	var err error
 	ns := rand.IntN(len(nameservers))
 	log.debugf("resolving %q with nameserver %s", fqdn, nameservers[ns])
-	record, _, err = c.Exchange(m, net.JoinHostPort(nameservers[ns], strconv.Itoa(53)))
+	record, err = exchangeDNS(c, m, net.JoinHostPort(nameservers[ns], "53"))
 	if err == nil {
 		cnames = cnameTargets(record)
 	}

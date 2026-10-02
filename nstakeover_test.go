@@ -3,9 +3,11 @@ package subtocheck
 import (
 	"errors"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/miekg/dns"
 )
@@ -276,5 +278,124 @@ func TestQueryCacheSendsEachQueryOnce(t *testing.T) {
 	_, _ = q.cached("192.0.2.1", "example.com", dns.TypeSOA, query)
 	if sent != 2 {
 		t.Errorf("expected a different type to be queried separately, got %d queries", sent)
+	}
+}
+
+// partly sets up sub.example.com delegated to a nameserver that serves it and to others.
+func partly(f fakeDNS, others ...string) {
+	f.referral("192.0.2.2", "sub.example.com", append([]string{"ns1.example-dns.test"}, others...)...)
+	f.serves("192.0.2.2", "sub.example.com")
+	f[key("192.0.2.2", "app.sub.example.com", dns.TypeNS)] = &dns.Msg{}
+}
+
+func TestPartlyDanglingDelegationToVulnerableProvider(t *testing.T) {
+	f := world()
+	partly(f, "ns1.digitalocean.com", "ns2.digitalocean.com")
+	f.host("ns1.digitalocean.com", "192.0.2.3")
+	f.host("ns2.digitalocean.com", "192.0.2.4")
+	f.refuses("192.0.2.3", "sub.example.com")
+	f.refuses("192.0.2.4", "sub.example.com")
+	got := f.checker().check("app.sub.example.com", nil)
+	if got == nil || got.kind != "vuln" || got.platform != "DigitalOcean DNS" {
+		t.Fatalf("expected a DigitalOcean DNS finding, got %+v", got)
+	}
+	if !strings.Contains(got.detail, "sub.example.com is also delegated to DigitalOcean DNS, which does not serve it") {
+		t.Errorf("unexpected detail %q", got.detail)
+	}
+}
+
+func TestPartlyDanglingDelegationToUnlistedProviderIsDNSIssue(t *testing.T) {
+	f := world()
+	partly(f, "ns-1.awsdns-00.com")
+	f.host("ns-1.awsdns-00.com", "192.0.2.3")
+	f.refuses("192.0.2.3", "sub.example.com")
+	got := f.checker().check("app.sub.example.com", nil)
+	if got == nil || got.kind != "dns" || !strings.Contains(got.err.Error(), "partly dangling delegation") {
+		t.Fatalf("expected a partly dangling DNS issue, got %+v", got)
+	}
+}
+
+func TestPartlyDanglingAcrossProvidersIsDNSIssue(t *testing.T) {
+	f := world()
+	partly(f, "ns1.digitalocean.com", "ns1.linode.com")
+	f.host("ns1.digitalocean.com", "192.0.2.3")
+	f.host("ns1.linode.com", "192.0.2.4")
+	f.refuses("192.0.2.3", "sub.example.com")
+	f.refuses("192.0.2.4", "sub.example.com")
+	got := f.checker().check("app.sub.example.com", nil)
+	if got == nil || got.kind != "dns" {
+		t.Fatalf("expected a DNS issue when the nameservers that do not serve the zone span providers, got %+v", got)
+	}
+}
+
+func TestUnresponsiveNameserverBesideServingOneIsHealthy(t *testing.T) {
+	f := world()
+	partly(f, "ns1.digitalocean.com")
+	f.host("ns1.digitalocean.com", "192.0.2.3")
+	// no SOA response from 192.0.2.3: it times out, which is not evidence of anything
+	if got := f.checker().check("app.sub.example.com", nil); got != nil {
+		t.Errorf("expected no issue, got %+v", got)
+	}
+}
+
+func TestExchangeRetriesTruncatedRepliesOverTCP(t *testing.T) {
+	handler := func(network string) dns.HandlerFunc {
+		return func(w dns.ResponseWriter, r *dns.Msg) {
+			m := new(dns.Msg)
+			m.SetReply(r)
+			m.Authoritative = true
+			if network == "udp" {
+				m.Truncated = true
+			} else {
+				m.Answer = []dns.RR{&dns.SOA{
+					Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 300},
+					Ns:  "ns.example.com.", Mbox: "hostmaster.example.com.", Serial: 1, Refresh: 3600, Retry: 600, Expire: 86400, Minttl: 300,
+				}}
+			}
+			if r.IsEdns0() == nil {
+				t.Errorf("expected the %s query to advertise EDNS", network)
+			}
+			_ = w.WriteMsg(m)
+		}
+	}
+	udp, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := udp.LocalAddr().(*net.UDPAddr).Port
+	tcp, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Skipf("could not listen on tcp port %d: %v", port, err)
+	}
+	var started sync.WaitGroup
+	started.Add(2)
+	udpServer := &dns.Server{PacketConn: udp, Handler: handler("udp"), NotifyStartedFunc: started.Done}
+	tcpServer := &dns.Server{Listener: tcp, Handler: handler("tcp"), NotifyStartedFunc: started.Done}
+	go func() { _ = udpServer.ActivateAndServe() }()
+	go func() { _ = tcpServer.ActivateAndServe() }()
+	defer func() { _ = udpServer.Shutdown(); _ = tcpServer.Shutdown() }()
+	started.Wait()
+
+	m := new(dns.Msg)
+	m.SetQuestion("example.com.", dns.TypeSOA)
+	resp, err := exchangeDNS(&dns.Client{Timeout: 2 * time.Second}, m, udp.LocalAddr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Truncated || !hasSOAFor(resp.Answer, "example.com") {
+		t.Errorf("expected the full answer over TCP, got %v", resp)
+	}
+}
+
+func TestTruncatedReplyIsNotEvidenceOfNotServing(t *testing.T) {
+	f := world()
+	f.referral("192.0.2.2", "sub.example.com", "ns1.digitalocean.com")
+	f.host("ns1.digitalocean.com", "192.0.2.3")
+	m := &dns.Msg{}
+	m.Authoritative = true
+	m.Truncated = true
+	f[key("192.0.2.3", "sub.example.com", dns.TypeSOA)] = m
+	if got := f.checker().check("app.sub.example.com", nil); got != nil {
+		t.Errorf("expected no conclusion from a truncated reply, got %+v", got)
 	}
 }
