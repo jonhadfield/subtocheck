@@ -19,6 +19,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/alecthomas/kingpin/v2"
 	"github.com/pkg/errors"
@@ -32,6 +33,7 @@ var (
 	quiet          = kingpin.Flag("quiet", "suppress command line output").Bool()
 	debug          = kingpin.Flag("debug", "write debug messages to the log").Bool()
 	logPath        = kingpin.Flag("log", "log file path (default: subtocheck-<timestamp>.log)").String()
+	workers        = kingpin.Flag("workers", "number of domains to check at once").Default(strconv.Itoa(subtocheck.DefaultWorkers)).Int()
 )
 
 // exitFindings is the exit status when potential takeovers are found. Errors exit with 1.
@@ -110,7 +112,16 @@ func main() {
 	if err != nil {
 		kingpin.Fatalf("%v: create it with one domain per line, or set its path with --domains", err)
 	}
-	findings, err := subtocheck.CheckDomains(domainsPath, configPath, debug, quiet, *logPath)
+	if *workers < 1 {
+		kingpin.Fatalf("--workers must be at least 1")
+	}
+	findings, err := subtocheck.CheckDomains(domainsPath, subtocheck.Options{
+		ConfigPath: *configPath,
+		LogPath:    *logPath,
+		Debug:      *debug,
+		Quiet:      *quiet,
+		Workers:    *workers,
+	})
 	if err != nil {
 		kingpin.Fatalf("%v", err)
 	}

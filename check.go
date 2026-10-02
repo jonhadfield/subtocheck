@@ -18,11 +18,10 @@ import (
 )
 
 var (
-	httpPrefix   = "http://"
-	httpsPrefix  = "https://"
-	protocols    = []string{"http", "https"}
-	resolveMutex sync.Mutex
-	nameservers  = []string{
+	httpPrefix  = "http://"
+	httpsPrefix = "https://"
+	protocols   = []string{"http", "https"}
+	nameservers = []string{
 		"8.8.8.8",         // google
 		"8.8.4.4",         // google
 		"209.244.0.3",     // level3
@@ -56,11 +55,9 @@ func checkResolves(fqdn string, log *scanLog) (issues issues, cnames []string) {
 	c.Timeout = 1500 * time.Millisecond
 	var record *dns.Msg
 	var err error
-	resolveMutex.Lock()
 	ns := rand.IntN(len(nameservers))
 	log.debugf("resolving %q with nameserver %s", fqdn, nameservers[ns])
 	record, _, err = c.Exchange(m, net.JoinHostPort(nameservers[ns], strconv.Itoa(53)))
-	resolveMutex.Unlock()
 	if err == nil {
 		cnames = cnameTargets(record)
 	}
@@ -181,43 +178,58 @@ func checkResponse(fqdn string, cnames []string, protocols []string, log *scanLo
 	tr := &http.Transport{
 		ResponseHeaderTimeout: time.Duration(responseHeaderTimeoutSecs) * time.Second,
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
+		// each host is requested once, so idle connections would only be left open
+		DisableKeepAlives: true,
 	}
-	for _, protocol := range protocols {
-		// record redirect locations, as some providers only identify themselves in those
-		var redirects []string
-		client := &http.Client{
-			Transport: tr,
-			Timeout:   time.Duration(clientTransportTimeoutSecs) * time.Second,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 10 {
-					return errors.New("stopped after 10 redirects")
-				}
-				redirects = append(redirects, req.URL.String())
-				return nil
-			},
-		}
-		var httpURL string
-		switch protocol {
-		case "http":
-			httpURL = httpPrefix + fqdn
-		case "https":
-			httpURL = httpsPrefix + fqdn
-		}
-		var httpResp *http.Response
-		var err error
-		log.debugf("requesting %q with client timeout %ds and response header timeout %ds",
-			httpURL, clientTransportTimeoutSecs, responseHeaderTimeoutSecs)
-		httpResp, err = client.Get(httpURL)
-		if err != nil {
-			issues = append(issues, issue{kind: "request", fqdn: fqdn, url: httpURL, err: err})
-			continue
-		}
+	// request each protocol at once, so a host that does not respond costs one timeout
+	// rather than one per protocol; results are kept in protocol order
+	results := make([][]issue, len(protocols))
+	var wg sync.WaitGroup
+	for i, protocol := range protocols {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = checkProtocol(fqdn, protocol, cnames, tr, clientTransportTimeoutSecs, responseHeaderTimeoutSecs, log)
+		}()
+	}
+	wg.Wait()
+	for _, r := range results {
+		issues = append(issues, r...)
+	}
+	return
+}
 
-		vulnIssue := checkVulnerable(httpURL, httpResp, cnames, redirects)
-		if vulnIssue.kind != "" {
-			vulnIssue.fqdn = fqdn
-			issues = append(issues, vulnIssue)
-		}
+func checkProtocol(fqdn, protocol string, cnames []string, tr *http.Transport, clientTimeoutSecs, headerTimeoutSecs int, log *scanLog) (issues issues) {
+	// record redirect locations, as some providers only identify themselves in those
+	var redirects []string
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   time.Duration(clientTimeoutSecs) * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			redirects = append(redirects, req.URL.String())
+			return nil
+		},
+	}
+	var httpURL string
+	switch protocol {
+	case "http":
+		httpURL = httpPrefix + fqdn
+	case "https":
+		httpURL = httpsPrefix + fqdn
+	}
+	log.debugf("requesting %q with client timeout %ds and response header timeout %ds",
+		httpURL, clientTimeoutSecs, headerTimeoutSecs)
+	httpResp, err := client.Get(httpURL)
+	if err != nil {
+		return []issue{{kind: "request", fqdn: fqdn, url: httpURL, err: err}}
+	}
+	vulnIssue := checkVulnerable(httpURL, httpResp, cnames, redirects)
+	if vulnIssue.kind != "" {
+		vulnIssue.fqdn = fqdn
+		issues = append(issues, vulnIssue)
 	}
 	return
 }
@@ -335,15 +347,28 @@ type scanResult struct {
 	issues issues
 }
 
-// CheckDomains is called from cmd/subtocheck/main.go to kick off the scans. Findings are
-// shown as they are found and every issue is written to the log at logPath, or a
-// timestamped file in the working directory if it is empty. It returns the number of
-// potential takeovers found, including those to verify manually, and an error if the
-// domains could not be read or the report could not be emailed.
-func CheckDomains(path string, configPath *string, debug *bool, quiet *bool, logPath string) (int, error) {
+// DefaultWorkers is the number of domains checked at once unless Options says otherwise.
+// More are faster, but busier hosts time out more often, and a request that times out is
+// a check that was not made.
+const DefaultWorkers = 10
+
+// Options configures a scan.
+type Options struct {
+	ConfigPath string // email configuration, if any
+	LogPath    string // log file; a timestamped file in the working directory if empty
+	Debug      bool   // write debug messages to the log
+	Quiet      bool   // no console output
+	Workers    int    // domains checked at once; DefaultWorkers if not positive
+}
+
+// CheckDomains is called from cmd/subtocheck/main.go to scan the domains listed in the
+// file at path. Findings are shown as they are found and every issue is written to the log.
+// It returns the number of potential takeovers found, including those to verify manually,
+// and an error if the domains could not be read or the report could not be emailed.
+func CheckDomains(path string, opts Options) (int, error) {
 	var conf config
-	if *configPath != "" {
-		conf = readConfig(*configPath)
+	if opts.ConfigPath != "" {
+		conf = readConfig(opts.ConfigPath)
 	}
 	file, err := os.Open(path)
 	if err != nil {
@@ -359,15 +384,20 @@ func CheckDomains(path string, configPath *string, debug *bool, quiet *bool, log
 	_ = file.Close()
 
 	start := time.Now()
+	logPath := opts.LogPath
 	if logPath == "" {
 		logPath = defaultLogPath(start)
 	}
-	log := newScanLog(logPath, *debug)
-	con := newConsole(*quiet, len(domains))
+	log := newScanLog(logPath, opts.Debug)
+	con := newConsole(opts.Quiet, len(domains))
 
 	jobs := make(chan string, len(domains))
 	results := make(chan scanResult, len(domains))
-	for w := 1; w <= 10; w++ {
+	workers := opts.Workers
+	if workers <= 0 {
+		workers = DefaultWorkers
+	}
+	for w := 1; w <= workers; w++ {
 		go worker(w, jobs, results, log)
 	}
 	for _, domain := range domains {
@@ -430,11 +460,20 @@ func worker(id int, jobs <-chan string, results chan<- scanResult, log *scanLog)
 		found, cnames := checkResolves(domain, log)
 		if len(found) == 0 {
 			// a name that resolves can still be delegated to a nameserver on a domain anyone
-			// could register; names that fail to resolve are walked by checkResolves
-			if dangling := delegations.check(domain, log); dangling != nil {
+			// could register; names that fail to resolve are walked by checkResolves. The walk
+			// runs alongside the HTTP requests, which take longer.
+			var dangling *issue
+			walked := make(chan struct{})
+			go func() {
+				defer close(walked)
+				dangling = delegations.check(domain, log)
+			}()
+			responses := checkResponse(domain, cnames, protocols, log)
+			<-walked
+			if dangling != nil {
 				found = append(found, *dangling)
 			}
-			found = append(found, checkResponse(domain, cnames, protocols, log)...)
+			found = append(found, responses...)
 		}
 		results <- scanResult{domain: domain, issues: found}
 	}
