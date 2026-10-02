@@ -1,0 +1,77 @@
+name: live checks
+
+# Checks the fingerprints, DNS hosts and registry replies subtocheck relies on against the
+# real services (live_test.go), so a provider changing its page or a registry rewording a
+# reply is noticed. Scheduled and manual runs open or update an issue when a check fails.
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - providers.go
+      - nstakeover.go
+      - registration.go
+      - whois.go
+      - live_test.go
+      - .github/workflows/live-checks.yml
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: live checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: live checks
+        # bash, rather than the default shell, sets pipefail, so a failing check is not
+        # hidden by tee
+        shell: bash
+        run: go test -tags live -run TestLive -count=1 -v -timeout 600s . 2>&1 | tee live.txt
+      - name: summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### Live checks"
+            echo
+            echo "$(grep -c -- '--- PASS' live.txt) passed, $(grep -c -- '--- FAIL' live.txt) failed, $(grep -c -- '--- SKIP' live.txt) skipped"
+            if grep -q -- '--- SKIP' live.txt; then
+              echo
+              echo "Skipped, as the provider refused requests from this network:"
+              grep -- '--- SKIP' live.txt | sed -E 's/^ *--- SKIP: /- /; s/ \(.*//'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: report failure
+        if: failure() && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "The live checks of fingerprints, DNS hosts and registry replies failed. A provider may have changed its page, or a registry its reply, so findings could be missed until the check is updated."
+            echo
+            echo '```'
+            grep -E -- '--- FAIL|no longer|does not count|error:|https:|http:' live.txt | head -80
+            echo '```'
+            echo
+            echo "Run: $RUN_URL"
+          } > body.md
+          existing=$(gh issue list --repo "$REPO" --state open --search 'in:title "Live checks failing"' --json number -q '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body-file body.md
+          else
+            gh issue create --repo "$REPO" --title "Live checks failing" --body-file body.md
+          fi

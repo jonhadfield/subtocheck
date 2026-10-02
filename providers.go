@@ -73,6 +73,12 @@ var vPatterns = []vPattern{
 		bodyStringMatch: "all",
 	},
 	{
+		// verified live October 2026
+		platform:        "Canny",
+		bodyStrings:     []string{"Workspace not found", "no Canny workspace at this address"},
+		bodyStringMatch: "all",
+	},
+	{
 		platform:        "Canny",
 		bodyStrings:     []string{"Company Not Found", "There is no such company. Did you enter the right URL?"},
 		bodyStringMatch: "all",

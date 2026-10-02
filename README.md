@@ -210,4 +210,12 @@ For SES, use the following:
 
 ## <a name="contributing"></a>contributing
 
-If you find any bugs or want to add another provider pattern, please create and issue or submit a PR. Thanks.
+If you find any bugs or want to add another provider pattern, please create an issue or submit a PR. Thanks.
+
+Fingerprints, DNS hosts and registry replies change over time. `live_test.go` checks them against the real services, and runs weekly, and on pull requests that change them, from the `live checks` workflow, which opens an issue when one fails. To run it locally:
+
+```bash
+go test -tags live -run TestLive -v .
+```
+
+When adding a fingerprint that can be confirmed this way, add its provider to `liveFingerprints` with an endpoint that serves the provider's page for unknown hosts.
