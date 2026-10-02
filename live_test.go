@@ -70,9 +70,16 @@ func TestLiveFingerprints(t *testing.T) {
 }
 
 // blockingStatus reports whether an HTTP status means the request was refused, rather than
-// answered with the provider's page.
+// answered with the provider's page. Anti-bot protection replies with various errors (403
+// from Tumblr and 456 from Tilda for CI runners), while providers' pages for unknown hosts
+// use 200, 404, 410 or, for Azure Front Door, 400. A page that changes but keeps one of
+// those statuses still fails the check.
 func blockingStatus(status int) bool {
-	return status == http.StatusForbidden || status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable
+	switch status {
+	case http.StatusBadRequest, http.StatusNotFound, http.StatusGone:
+		return false
+	}
+	return status >= http.StatusBadRequest
 }
 
 // probe requests unclaimedHost from endpoint and returns the platform it matches, if any,
