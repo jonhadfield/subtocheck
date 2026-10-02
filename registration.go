@@ -50,7 +50,7 @@ type registrationChecker struct {
 func newRegistrationChecker() *registrationChecker {
 	client := &http.Client{Timeout: 10 * time.Second}
 	return &registrationChecker{
-		resolve:   newDelegationChecker(nil).resolve,
+		resolve:   queries.resolve,
 		rdapBases: sync.OnceValue(func() map[string]string { return fetchRDAPBootstrap(client, rdapBootstrapURL) }),
 		client:    client,
 		cache:     map[string]registrationStatus{},

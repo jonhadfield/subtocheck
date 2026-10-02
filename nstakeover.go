@@ -4,6 +4,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
@@ -11,40 +12,87 @@ import (
 	"golang.org/x/net/publicsuffix"
 )
 
-// delegationChecker finds dangling NS delegations: a name delegated to nameservers that
-// do not serve its zone, usually because the zone was deleted from the DNS host. It walks
-// the delegations from the public suffix down to the name, asking each zone's own
-// nameservers rather than a resolver, as resolvers only report SERVFAIL for these.
+// delegationChecker finds dangling NS delegations on the way to a name: delegations to
+// nameservers that do not serve the zone, usually because it was deleted from the DNS host,
+// and to nameservers on a domain that anyone could register. It walks the delegations from
+// the public suffix down to the name, asking each zone's own nameservers rather than a
+// resolver, as resolvers only report SERVFAIL for these.
 type delegationChecker struct {
 	// resolve sends a recursive query to a public resolver
 	resolve func(name string, qtype uint16) (*dns.Msg, error)
 	// ask sends a non-recursive query to a nameserver at ip
 	ask func(ip, name string, qtype uint16) (*dns.Msg, error)
-	log *scanLog
+	// registration reports whether a nameserver's domain is registered
+	registration registrationLookup
 }
 
-func newDelegationChecker(log *scanLog) *delegationChecker {
-	client := &dns.Client{Timeout: 2 * time.Second}
-	exchange := func(server, name string, qtype uint16, recurse bool) (*dns.Msg, error) {
-		m := new(dns.Msg)
-		m.SetQuestion(dns.Fqdn(name), qtype)
-		m.RecursionDesired = recurse
-		r, _, err := client.Exchange(m, net.JoinHostPort(server, "53"))
-		return r, err
-	}
-	return &delegationChecker{
-		resolve: func(name string, qtype uint16) (*dns.Msg, error) {
-			return exchange(nameservers[rand.IntN(len(nameservers))], name, qtype, true)
-		},
-		ask: func(ip, name string, qtype uint16) (*dns.Msg, error) {
-			return exchange(ip, name, qtype, false)
-		},
-		log: log,
-	}
+func newDelegationChecker(q *dnsQueries, registration registrationLookup) *delegationChecker {
+	return &delegationChecker{resolve: q.resolve, ask: q.ask, registration: registration}
 }
+
+// dnsQueries sends DNS queries and caches the responses, and failures, for the rest of the
+// scan: the domains in a scan share zones, nameservers and registrations, so most walks
+// repeat queries already made.
+type dnsQueries struct {
+	client *dns.Client
+	mu     sync.Mutex
+	cache  map[string]*cachedQuery
+}
+
+type cachedQuery struct {
+	once sync.Once
+	resp *dns.Msg
+	err  error
+}
+
+func newDNSQueries() *dnsQueries {
+	return &dnsQueries{client: &dns.Client{Timeout: 2 * time.Second}, cache: map[string]*cachedQuery{}}
+}
+
+// resolve sends a recursive query to a public resolver.
+func (q *dnsQueries) resolve(name string, qtype uint16) (*dns.Msg, error) {
+	return q.cached("resolver", name, qtype, func() (*dns.Msg, error) {
+		return q.exchange(nameservers[rand.IntN(len(nameservers))], name, qtype, true)
+	})
+}
+
+// ask sends a non-recursive query to the nameserver at ip.
+func (q *dnsQueries) ask(ip, name string, qtype uint16) (*dns.Msg, error) {
+	return q.cached(ip, name, qtype, func() (*dns.Msg, error) {
+		return q.exchange(ip, name, qtype, false)
+	})
+}
+
+func (q *dnsQueries) cached(server, name string, qtype uint16, query func() (*dns.Msg, error)) (*dns.Msg, error) {
+	key := server + "|" + strings.ToLower(name) + "|" + dns.TypeToString[qtype]
+	q.mu.Lock()
+	entry, ok := q.cache[key]
+	if !ok {
+		entry = &cachedQuery{}
+		q.cache[key] = entry
+	}
+	q.mu.Unlock()
+	// concurrent callers for the same query wait for the one in flight
+	entry.once.Do(func() { entry.resp, entry.err = query() })
+	return entry.resp, entry.err
+}
+
+func (q *dnsQueries) exchange(server, name string, qtype uint16, recurse bool) (*dns.Msg, error) {
+	m := new(dns.Msg)
+	m.SetQuestion(dns.Fqdn(name), qtype)
+	m.RecursionDesired = recurse
+	r, _, err := q.client.Exchange(m, net.JoinHostPort(server, "53"))
+	return r, err
+}
+
+// queries and delegations are shared across a scan.
+var (
+	queries     = newDNSQueries()
+	delegations = newDelegationChecker(queries, registrations.status)
+)
 
 // check returns an issue for the first dangling delegation on the way to fqdn, or nil.
-func (c *delegationChecker) check(fqdn string) *issue {
+func (c *delegationChecker) check(fqdn string, log *scanLog) *issue {
 	fqdn = strings.ToLower(strings.TrimSuffix(fqdn, "."))
 	suffix, _ := publicsuffix.PublicSuffix(fqdn)
 	if suffix == "" || suffix == fqdn {
@@ -74,7 +122,10 @@ func (c *delegationChecker) check(fqdn string) *issue {
 			// still within the current zone
 			continue
 		}
-		c.log.debugf("%s is delegated to %s", zone, strings.Join(delegated, ", "))
+		log.debugf("%s is delegated to %s", zone, strings.Join(delegated, ", "))
+		if unregistered := c.unregisteredNameserver(fqdn, zone, delegated); unregistered != nil {
+			return unregistered
+		}
 		addresses := c.addresses(delegated)
 		switch c.serving(addresses, zone) {
 		case servingYes:
@@ -84,6 +135,29 @@ func (c *delegationChecker) check(fqdn string) *issue {
 		default:
 			// the nameservers could not be reached, so nothing can be concluded
 			return nil
+		}
+	}
+	return nil
+}
+
+// unregisteredNameserver reports a nameserver for zone whose hostname does not exist and
+// whose domain is not registered. Whoever registers it answers queries for the zone, even
+// when the other nameservers are healthy. Nameservers within the zone itself are skipped:
+// they cannot be registered separately.
+func (c *delegationChecker) unregisteredNameserver(fqdn, zone string, delegated []string) *issue {
+	zoneDomain := registeredDomain(zone)
+	for _, host := range delegated {
+		domain := registeredDomain(host)
+		if domain == "" || domain == zoneDomain {
+			continue
+		}
+		resp, err := c.resolve(host, dns.TypeA)
+		if err != nil || resp == nil || resp.Rcode != dns.RcodeNameError {
+			continue
+		}
+		subject := zone + " is delegated to nameserver " + host
+		if i := registrationIssue(fqdn, subject, domain, c.registration(domain)); i != nil {
+			return i
 		}
 	}
 	return nil
