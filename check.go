@@ -477,7 +477,7 @@ func CheckDomains(path string, opts Options) (int, error) {
 		return findings, nil
 	}
 	if conf.Email.Provider != "" {
-		return findings, emailResults(conf.Email, pIssues)
+		return findings, emailResults(conf.Email, newReport(pIssues, len(domains), time.Since(start), summaryLogPath))
 	}
 	return findings, nil
 }
