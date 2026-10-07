@@ -153,11 +153,35 @@ Options:
 | `--domains <path>` | domain list file (default `domains.txt`) |
 | `--log <path>` | log file path |
 | `--quiet` | no console output; the log file is still written |
+| `--json` | write the result to stdout as JSON instead of console output (see below) |
 | `--debug` | also write debug messages to the log file |
 | `--config <path>` | email configuration (see below) |
 | `--workers <n>` | domains checked at once (default 10); more are faster, but busy hosts time out more often, and a timed-out request is a check not made |
 
 When the output is not a terminal, for example piped or run from cron, the progress bar and colours are left out. Colour can also be turned off with `NO_COLOR=1`.
+
+With `--json`, the result is written to stdout as a single JSON document, for other tools to consume:
+
+```json
+{
+  "domains": 3,
+  "duration_seconds": 0.5,
+  "summary": { "takeovers": 1, "verify": 0, "dns_issues": 1, "request_errors": 0 },
+  "findings": [
+    {
+      "host": "app.example.com",
+      "platform": "Framer",
+      "kind": "takeover",
+      "urls": ["http://app.example.com", "https://app.example.com"]
+    }
+  ],
+  "dns_issues": [{ "target": "old.example.com", "error": "old.example.com could not be resolved (...)" }],
+  "request_errors": [],
+  "log": "subtocheck-20261007-071203.log"
+}
+```
+
+A finding's `kind` is `takeover`, or `verify` for edge cases to check manually; it may also have a `detail`. Lists are empty rather than absent, and `log` is left out when no log was written.
 
 Exit status, for scripts and CI:
 

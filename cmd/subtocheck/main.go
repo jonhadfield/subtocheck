@@ -31,6 +31,7 @@ var (
 	domainListPath = kingpin.Flag("domains", "domain list file path").Default("domains.txt").String()
 	configPath     = kingpin.Flag("config", "config file").String()
 	quiet          = kingpin.Flag("quiet", "suppress command line output").Bool()
+	jsonOutput     = kingpin.Flag("json", "write the result to stdout as JSON instead of console output").Bool()
 	debug          = kingpin.Flag("debug", "write debug messages to the log").Bool()
 	logPath        = kingpin.Flag("log", "log file path (default: subtocheck-<timestamp>.log)").String()
 	workers        = kingpin.Flag("workers", "number of domains to check at once").Default(strconv.Itoa(subtocheck.DefaultWorkers)).Int()
@@ -104,8 +105,9 @@ func main() {
 	kingpin.Parse()
 	kingpin.UsageTemplate(usageTemplate)
 
-	if *quiet && *configPath == "" {
-		fmt.Println("warning: running without console output or email config: results are only written to the log file")
+	if *quiet && !*jsonOutput && *configPath == "" {
+		// to stderr, so it never mixes with output meant for other tools
+		fmt.Fprintln(os.Stderr, "warning: running without console output or email config: results are only written to the log file")
 	}
 
 	domainsPath, err := getDomainListFilePath(*domainListPath)
@@ -120,6 +122,7 @@ func main() {
 		LogPath:    *logPath,
 		Debug:      *debug,
 		Quiet:      *quiet,
+		JSON:       *jsonOutput,
 		Workers:    *workers,
 	})
 	if err != nil {

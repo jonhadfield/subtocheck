@@ -386,6 +386,7 @@ type Options struct {
 	LogPath    string // log file; a timestamped file in the working directory if empty
 	Debug      bool   // write debug messages to the log
 	Quiet      bool   // no console output
+	JSON       bool   // write the result to stdout as JSON instead of console output
 	Workers    int    // domains checked at once; DefaultWorkers if not positive
 }
 
@@ -417,7 +418,8 @@ func CheckDomains(path string, opts Options) (int, error) {
 		logPath = defaultLogPath(start)
 	}
 	log := newScanLog(logPath, opts.Debug)
-	con := newConsole(opts.Quiet, len(domains))
+	// JSON output replaces the console's, so stdout holds only the JSON
+	con := newConsole(opts.Quiet || opts.JSON, len(domains))
 
 	jobs := make(chan string, len(domains))
 	results := make(chan scanResult, len(domains))
@@ -465,7 +467,14 @@ func CheckDomains(path string, opts Options) (int, error) {
 		summaryLogPath = logPath
 	}
 	logErr := log.Close()
-	con.summary(pIssues, time.Since(start), summaryLogPath, logErr)
+	elapsed := time.Since(start)
+	con.summary(pIssues, elapsed, summaryLogPath, logErr)
+	r := newReport(pIssues, len(domains), elapsed, summaryLogPath)
+	if opts.JSON {
+		if err := writeJSON(os.Stdout, newJSONReport(r, pIssues)); err != nil {
+			return 0, errors.Wrap(err, "failed to write JSON")
+		}
+	}
 	takeovers, verify := countFindings(pIssues.potVulns)
 	findings := takeovers + verify
 
@@ -477,7 +486,7 @@ func CheckDomains(path string, opts Options) (int, error) {
 		return findings, nil
 	}
 	if conf.Email.Provider != "" {
-		return findings, emailResults(conf.Email, newReport(pIssues, len(domains), time.Since(start), summaryLogPath))
+		return findings, emailResults(conf.Email, r)
 	}
 	return findings, nil
 }
