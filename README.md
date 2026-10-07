@@ -169,7 +169,7 @@ Exit status, for scripts and CI:
 
 ## <a name="sending-email-reports"></a>sending email reports
 
-SMTP (TLS Only) and AWS SES (Simple Email Service) are supported. If defined, then a report will be emailed that includes a body with a count of respective issues and a list of FQDNs that may be vulnerable to takeovers. Attached to the email will be separate lists of DNS and request issues encountered during the scan.
+SMTP (TLS Only) and AWS SES (Simple Email Service) are supported. If defined, a report is emailed after each scan, with a plain text and an HTML version. Its subject gives the number of potential takeovers and those to verify, after the configured subject (default "subtocheck scan"). It lists each finding, as TAKEOVER or VERIFY, with its platform, the detail of what was found and the URLs it was found at, along with counts of DNS issues and request errors. The scan's log, with every issue in detail, is attached.
 
 Email configuration is defined as YAML. For SMTP create a file containing this configuration:
 

@@ -3,16 +3,16 @@ package subtocheck
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
+	htmltemplate "html/template"
 	"net"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
-
-	"crypto/tls"
-	"os"
-
+	texttemplate "text/template"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -74,120 +74,92 @@ func validateEmailSettings(email emailConfig) (err error) {
 	return
 }
 
-func generateDNSIssueList(dnsIssues []issue) (filePath string, err error) {
-	timeStamp := time.Now().UTC().Format("20060102150405")
-	filePath = fmt.Sprintf("dns_issues_%s.txt", timeStamp)
-	// convert issues to file content
-	var buffer bytes.Buffer
-	for _, dnsIssue := range dnsIssues {
-		buffer.WriteString(dnsIssue.fqdn + " - " + dnsIssue.err.Error() + "\n")
-	}
-	if err = os.WriteFile(filePath, buffer.Bytes(), 0o644); err != nil {
-		err = errors.Wrap(err, "failed to write DNS issues attachment")
-	}
-	return
+// defaultSubject is the email subject unless one is configured. The findings' headline is
+// appended to it.
+const defaultSubject = "subtocheck scan"
+
+var emailText = texttemplate.Must(texttemplate.New("text").Funcs(texttemplate.FuncMap{"plural": plural}).Parse(`subtocheck scanned {{.Domains}} {{plural .Domains "domain" "domains"}} in {{.Duration}}: {{.Headline}}.
+{{if .Findings}}
+Potential takeovers
+{{range .Findings}}
+{{if .Verify}}VERIFY  {{else}}TAKEOVER{{end}}  {{.Host}}  ({{.Platform}}){{if .Detail}}
+          {{.Detail}}{{end}}{{range .URLs}}
+          {{.}}{{end}}
+{{end}}{{end}}
+DNS issues:     {{.DNSIssues}}
+Request errors: {{.RequestErrors}}
+{{if .LogPath}}
+Every issue is detailed in the attached log, {{.LogName}}.
+{{end}}`))
+
+var emailHTML = htmltemplate.Must(htmltemplate.New("html").Funcs(htmltemplate.FuncMap{"plural": plural}).Parse(`<!DOCTYPE html>
+<html><body style="margin:0;padding:24px;background:#f6f6f6;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;color:#1c1c1c">
+<div style="max-width:720px;margin:0 auto;background:#ffffff;border:1px solid #e2e2e2;border-radius:8px;padding:24px">
+<h2 style="margin:0 0 4px 0;font-size:20px">subtocheck: {{.Headline}}</h2>
+<p style="margin:0 0 20px 0;color:#6b6b6b;font-size:14px">Scanned {{.Domains}} {{plural .Domains "domain" "domains"}} in {{.Duration}}</p>
+<table cellpadding="0" cellspacing="0" style="margin-bottom:20px;font-size:14px"><tr>
+<td style="padding:8px 14px;border-radius:6px;background:{{if .Takeovers}}#ffe5e5{{else}}#f0f0f0{{end}}"><b style="font-size:18px">{{.Takeovers}}</b> {{plural .Takeovers "potential takeover" "potential takeovers"}}</td><td style="width:8px"></td>
+<td style="padding:8px 14px;border-radius:6px;background:{{if .Verify}}#fff4d6{{else}}#f0f0f0{{end}}"><b style="font-size:18px">{{.Verify}}</b> to verify</td><td style="width:8px"></td>
+<td style="padding:8px 14px;border-radius:6px;background:#f0f0f0"><b style="font-size:18px">{{.DNSIssues}}</b> {{plural .DNSIssues "DNS issue" "DNS issues"}}</td><td style="width:8px"></td>
+<td style="padding:8px 14px;border-radius:6px;background:#f0f0f0"><b style="font-size:18px">{{.RequestErrors}}</b> {{plural .RequestErrors "request error" "request errors"}}</td>
+</tr></table>
+{{if .Findings}}<table cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;font-size:14px">
+{{range .Findings}}<tr><td style="width:1%;padding:10px 12px 10px 0;border-top:1px solid #eeeeee;vertical-align:top;white-space:nowrap">{{if .Verify}}<span style="background:#ffd75f;color:#1c1c1c;font-weight:bold;font-size:12px;padding:2px 8px;border-radius:4px">VERIFY</span>{{else}}<span style="background:#ff5f5f;color:#ffffff;font-weight:bold;font-size:12px;padding:2px 8px;border-radius:4px">TAKEOVER</span>{{end}}</td>
+<td style="padding:10px 0;border-top:1px solid #eeeeee;vertical-align:top"><b>{{.Host}}</b> <span style="color:#0b7fa8">{{.Platform}}</span>{{if .Detail}}<br><span style="color:#6b6b6b">{{.Detail}}</span>{{end}}{{range .URLs}}<br><span style="color:#6b6b6b;font-family:Menlo,Consolas,monospace;font-size:12px">{{.}}</span>{{end}}</td></tr>
+{{end}}</table>
+{{else}}<p style="font-size:14px;color:#2e7d32">No potential takeovers were found.</p>{{end}}
+{{if .LogPath}}<p style="margin:20px 0 0 0;color:#6b6b6b;font-size:13px">Every issue is detailed in the attached log, {{.LogName}}.</p>{{end}}
+</div></body></html>
+`))
+
+// emailView is what the templates render.
+type emailView struct {
+	report
+	Headline string
+	LogName  string
 }
 
-func generateRequestIssueList(requestIssues []issue) (filePath string, err error) {
-	timeStamp := time.Now().UTC().Format("20060102150405")
-	filePath = fmt.Sprintf("request_issues_%s.txt", timeStamp)
-	// convert issues to file content
-	var buffer bytes.Buffer
-	for _, requestIssue := range requestIssues {
-		buffer.WriteString(requestIssue.url + " - " + requestIssue.err.Error() + "\n")
+// renderEmail returns the subject and the plain text and HTML bodies of the email report.
+func renderEmail(subject string, r report) (string, string, string, error) {
+	if subject == "" {
+		subject = defaultSubject
 	}
-	if err = os.WriteFile(filePath, buffer.Bytes(), 0o644); err != nil {
-		err = errors.Wrap(err, "failed to write request issues attachment")
+	view := emailView{report: r, Headline: r.headline(), LogName: filepath.Base(r.LogPath)}
+	view.Duration = r.Duration.Round(100 * time.Millisecond)
+	var text, html bytes.Buffer
+	if err := emailText.Execute(&text, view); err != nil {
+		return "", "", "", errors.Wrap(err, "failed to render email")
 	}
-	return
+	if err := emailHTML.Execute(&html, view); err != nil {
+		return "", "", "", errors.Wrap(err, "failed to render email")
+	}
+	return subject + " - " + view.Headline, text.String(), html.String(), nil
 }
 
-func emailResults(email emailConfig, pIssues processedIssues) (err error) {
+func emailResults(email emailConfig, r report) (err error) {
+	if err = validateEmailSettings(email); err != nil {
+		return errors.Wrap(err, "invalid email settings")
+	}
+	subject, text, html, err := renderEmail(email.Subject, r)
+	if err != nil {
+		return err
+	}
 	msg := gomail.NewMessage()
 	msg.SetHeader("From", email.Source)
-	var emailSubject string
-	if email.Subject != "" {
-		emailSubject = email.Subject
-	} else {
-		emailSubject = "AWS Account Scan"
-	}
-
-	if len(pIssues.potVulns) > 0 {
-		emailSubject += " - potential vulnerabilities found"
-	} else {
-		emailSubject += " - no potential vulnerabilities found"
-	}
-	msg.SetHeader("Subject", emailSubject)
-
-	body := "<font face=\"Courier New, Courier, monospace\">" +
-		"&nbsp;Issues<br/>" +
-		"--------" +
-		"<br/>" +
-		"</font>" +
-		"<table border=\"0\" cellpadding=\"3\" cellspacing=\"3\" width=\"300\">" +
-		"<tr>" +
-		"<td><font face=\"Courier New, Courier, monospace\">Potentially vulnerable</font></td>" +
-		"<td><font face=\"Courier New, Courier, monospace\">&nbsp;" + strconv.Itoa(len(pIssues.potVulns)) + "</font></td>" +
-		"</tr>" +
-		"<tr>" +
-		"<td><font face=\"Courier New, Courier, monospace\">DNS</font></td>" +
-		"<td><font face=\"Courier New, Courier, monospace\">&nbsp;" + strconv.Itoa(len(pIssues.DNS)) + "</font></td>" +
-		"</tr>" +
-		"<tr>" +
-		"<td><font face=\"Courier New, Courier, monospace\">Request</font></td>" +
-		"<td><font face=\"Courier New, Courier, monospace\">&nbsp;" + strconv.Itoa(len(pIssues.request)) + "</font></td>" +
-		"</tr>" +
-		"</table>" +
-		"<br/><font face=\"Courier New, Courier, monospace\">" +
-		"&nbsp;Potentially vulnerable URLs<br/>" +
-		"-----------------------------" +
-		"<br/>" +
-		"</font>" +
-		"<table border=\"0\" cellpadding=\"3\" cellspacing=\"4\" width=\"300\">"
-
-	if len(pIssues.potVulns) > 0 {
-		for _, vuln := range pIssues.potVulns {
-			body += "<tr><td width=\"300\"><font face=\"Courier New, Courier, monospace\">" + vuln.url + " (" + vuln.platform + ")</font></td></tr>"
-		}
-	} else {
-		body += "<tr><td width=\"300\"><font face=\"Courier New, Courier, monospace\">none found</font></td></tr>"
-	}
-	// close table
-	body = body + "</table>"
-	msg.SetBody("text/html", body)
-
-	var dnsIssuesFilePath, requestIssuesFilePath string
-	// the attachments are only removed if sending fails
-	defer func() {
-		if err != nil {
-			cleanUpFiles(dnsIssuesFilePath, requestIssuesFilePath)
-		}
-	}()
-	if len(pIssues.DNS) > 0 {
-		// generate DNS issues file to attach
-		if dnsIssuesFilePath, err = generateDNSIssueList(pIssues.DNS); err != nil {
-			return
-		}
-		msg.Attach(dnsIssuesFilePath)
-	}
-
-	if len(pIssues.request) > 0 {
-		// generate requests issues file to attach
-		if requestIssuesFilePath, err = generateRequestIssueList(pIssues.request); err != nil {
-			return
-		}
-		msg.Attach(requestIssuesFilePath)
-	}
-
-	var emailRaw bytes.Buffer
-	_, err = msg.WriteTo(&emailRaw)
-	if err != nil {
-		err = errors.Wrap(err, "failed to build email")
-		return
+	msg.SetHeader("To", email.Recipients...)
+	msg.SetHeader("Subject", subject)
+	msg.SetBody("text/plain", text)
+	msg.AddAlternative("text/html", html)
+	if r.LogPath != "" {
+		msg.Attach(r.LogPath)
 	}
 
 	switch email.Provider {
 	case "ses":
+		var raw bytes.Buffer
+		if _, err = msg.WriteTo(&raw); err != nil {
+			return errors.Wrap(err, "failed to build email")
+		}
 		opts := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(email.Region)}
 		if email.AWSAccessKeyID != "" && email.AWSSecretAccessKey != "" {
 			// use static credentials, with session token if provided
@@ -199,54 +171,25 @@ func emailResults(email emailConfig, pIssues processedIssues) (err error) {
 		var cfg aws.Config
 		cfg, err = awsconfig.LoadDefaultConfig(ctx, opts...)
 		if err != nil {
-			err = errors.Wrap(err, "failed to load AWS configuration")
-			return
+			return errors.Wrap(err, "failed to load AWS configuration")
 		}
-		err = validateEmailSettings(email)
-		if err != nil {
-			err = errors.Wrap(err, "invalid email settings")
-			return
-		}
-		msg.SetHeader("To", strings.Join(email.Recipients, ","))
 		svc := ses.NewFromConfig(cfg)
 		input := ses.SendRawEmailInput{
 			Source:       aws.String(email.Source),
 			Destinations: email.Recipients,
-			RawMessage:   &types.RawMessage{Data: emailRaw.Bytes()},
+			RawMessage:   &types.RawMessage{Data: raw.Bytes()},
 		}
-		_, err = svc.SendRawEmail(ctx, &input)
-		if err != nil {
-			err = errors.Wrap(err, "failed to send email via SES")
+		if _, err = svc.SendRawEmail(ctx, &input); err != nil {
+			return errors.Wrap(err, "failed to send email via SES")
 		}
 	case "smtp":
-		msg.SetHeader("To", email.Recipients...)
 		host := email.Host
 		port, _ := strconv.Atoi(email.Port)
 		dialer := gomail.NewDialer(host, port, email.Username, email.Password)
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: false,
-			ServerName:         host,
-		}
-		dialer.TLSConfig = tlsConfig
-		err = dialer.DialAndSend(msg)
-		if err != nil {
-			err = errors.Wrapf(err, "failed to send email via SMTP server %s", net.JoinHostPort(host, email.Port))
+		dialer.TLSConfig = &tls.Config{ServerName: host}
+		if err = dialer.DialAndSend(msg); err != nil {
+			return errors.Wrapf(err, "failed to send email via SMTP server %s", net.JoinHostPort(host, email.Port))
 		}
 	}
-	return
-}
-
-func cleanUpFiles(dnsIssuesFilePath string, requestIssuesFilePath string) {
-	if dnsIssuesFilePath != "" {
-		delDNSErr := os.Remove(dnsIssuesFilePath)
-		if delDNSErr != nil && !os.IsNotExist(delDNSErr) {
-			fmt.Println(delDNSErr)
-		}
-	}
-	if requestIssuesFilePath != "" {
-		delReqErr := os.Remove(requestIssuesFilePath)
-		if delReqErr != nil && !os.IsNotExist(delReqErr) {
-			fmt.Println(delReqErr)
-		}
-	}
+	return nil
 }
