@@ -11,20 +11,23 @@ import (
 	"github.com/pkg/errors"
 )
 
-var nameservers = []string{
-	"8.8.8.8",         // google
-	"8.8.4.4",         // google
-	"209.244.0.3",     // level3
-	"209.244.0.4",     // level3
-	"1.1.1.1",         // cloudflare
-	"1.0.0.1",         // cloudflare
-	"9.9.9.9",         // quad9
-	"149.112.112.112", // quad9
+// defaultResolvers are the public recursive resolvers a scan uses, chosen at random per
+// query.
+var defaultResolvers = []string{
+	"8.8.8.8:53",         // google
+	"8.8.4.4:53",         // google
+	"209.244.0.3:53",     // level3
+	"209.244.0.4:53",     // level3
+	"1.1.1.1:53",         // cloudflare
+	"1.0.0.1:53",         // cloudflare
+	"9.9.9.9:53",         // quad9
+	"149.112.112.112:53", // quad9
 }
 
 // checkResolves resolves the fqdn and returns any DNS issues along with the CNAME
 // targets followed, so later checks can tell which provider serves the name.
-func checkResolves(fqdn string, log *scanLog) (issues issues, cnames []string) {
+func (s *scanner) checkResolves(fqdn string) (issues issues, cnames []string) {
+	log := s.log
 	c := new(dns.Client)
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(fqdn), dns.TypeA)
@@ -32,9 +35,10 @@ func checkResolves(fqdn string, log *scanLog) (issues issues, cnames []string) {
 	c.Timeout = 1500 * time.Millisecond
 	var record *dns.Msg
 	var err error
-	ns := rand.IntN(len(nameservers))
-	log.debugf("resolving %q with nameserver %s", fqdn, nameservers[ns])
-	record, err = exchangeDNS(c, m, net.JoinHostPort(nameservers[ns], "53"))
+	resolver := s.env.resolvers[rand.IntN(len(s.env.resolvers))]
+	resolverHost, _, _ := net.SplitHostPort(resolver)
+	log.debugf("resolving %q with nameserver %s", fqdn, resolverHost)
+	record, err = exchangeDNS(c, m, resolver)
 	if err == nil {
 		cnames = cnameTargets(record)
 	}
@@ -43,24 +47,24 @@ func checkResolves(fqdn string, log *scanLog) (issues issues, cnames []string) {
 		issues = append(issues, issue{kind: "dns", fqdn: fqdn, err: err})
 	} else if record.Rcode == dns.RcodeNameError && len(cnames) > 0 {
 		// the name exists but the CNAME points at a name that does not
-		issues = append(issues, danglingCNAMEIssue(fqdn, cnames[len(cnames)-1], registrations.status))
+		issues = append(issues, danglingCNAMEIssue(fqdn, cnames[len(cnames)-1], s.registrations.status))
 		err = issues[len(issues)-1].err
 	} else if record.Rcode == dns.RcodeServerFailure || record.Rcode == dns.RcodeRefused {
 		// what a resolver returns for a name delegated to nameservers that do not serve it
-		if dangling := delegations.check(fqdn, log); dangling != nil {
+		if dangling := s.delegations.check(fqdn, log); dangling != nil {
 			issues = append(issues, *dangling)
 			err = dangling.err
 		} else {
 			err = errors.Errorf("%s could not be resolved (%s from %s)", fqdn, dns.RcodeToString[record.Rcode],
-				nameservers[ns])
+				resolverHost)
 			issues = append(issues, issue{kind: "dns", fqdn: fqdn, err: err})
 		}
 	} else if len(record.Answer) == 0 {
-		err = errors.Errorf("%s could not be resolved (no answer from %s)", fqdn, nameservers[ns])
+		err = errors.Errorf("%s could not be resolved (no answer from %s)", fqdn, resolverHost)
 		issues = append(issues, issue{kind: "dns", fqdn: fqdn, err: err})
 	} else if record.Rcode != 0 {
 		err = errors.Errorf("%s could not be resolved (%s from %s)", fqdn, dns.RcodeToString[record.Rcode],
-			nameservers[ns])
+			resolverHost)
 		issues = append(issues, issue{kind: "dns", fqdn: fqdn, err: err})
 	}
 	if err != nil {
@@ -126,9 +130,11 @@ func hasSuffix(host string, domains []string) bool {
 // scan: the domains in a scan share zones, nameservers and registrations, so most walks
 // repeat queries already made.
 type dnsQueries struct {
-	client *dns.Client
-	mu     sync.Mutex
-	cache  map[string]*cachedQuery
+	client    *dns.Client
+	resolvers []string // recursive resolvers, as host:port
+	dnsPort   string   // port authoritative nameservers are asked on
+	mu        sync.Mutex
+	cache     map[string]*cachedQuery
 }
 
 type cachedQuery struct {
@@ -137,21 +143,26 @@ type cachedQuery struct {
 	err  error
 }
 
-func newDNSQueries() *dnsQueries {
-	return &dnsQueries{client: &dns.Client{Timeout: 2 * time.Second}, cache: map[string]*cachedQuery{}}
+func newDNSQueries(resolvers []string, dnsPort string) *dnsQueries {
+	return &dnsQueries{
+		client:    &dns.Client{Timeout: 2 * time.Second},
+		resolvers: resolvers,
+		dnsPort:   dnsPort,
+		cache:     map[string]*cachedQuery{},
+	}
 }
 
 // resolve sends a recursive query to a public resolver.
 func (q *dnsQueries) resolve(name string, qtype uint16) (*dns.Msg, error) {
 	return q.cached("resolver", name, qtype, func() (*dns.Msg, error) {
-		return q.exchange(nameservers[rand.IntN(len(nameservers))], name, qtype, true)
+		return q.exchange(q.resolvers[rand.IntN(len(q.resolvers))], name, qtype, true)
 	})
 }
 
 // ask sends a non-recursive query to the nameserver at ip.
 func (q *dnsQueries) ask(ip, name string, qtype uint16) (*dns.Msg, error) {
 	return q.cached(ip, name, qtype, func() (*dns.Msg, error) {
-		return q.exchange(ip, name, qtype, false)
+		return q.exchange(net.JoinHostPort(ip, q.dnsPort), name, qtype, false)
 	})
 }
 
@@ -169,11 +180,12 @@ func (q *dnsQueries) cached(server, name string, qtype uint16, query func() (*dn
 	return entry.resp, entry.err
 }
 
-func (q *dnsQueries) exchange(server, name string, qtype uint16, recurse bool) (*dns.Msg, error) {
+// exchange sends a query to address, as host:port.
+func (q *dnsQueries) exchange(address, name string, qtype uint16, recurse bool) (*dns.Msg, error) {
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(name), qtype)
 	m.RecursionDesired = recurse
-	return exchangeDNS(q.client, m, net.JoinHostPort(server, "53"))
+	return exchangeDNS(q.client, m, address)
 }
 
 // ednsBufferSize is the UDP payload size advertised with EDNS, as recommended to avoid

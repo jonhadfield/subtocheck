@@ -65,20 +65,21 @@ type registrationChecker struct {
 	cache map[string]registration
 }
 
-func newRegistrationChecker() *registrationChecker {
-	client := &http.Client{Timeout: 10 * time.Second}
+func newRegistrationChecker(resolve func(string, uint16) (*dns.Msg, error), rdapBases func() map[string]string, whois func(string) (string, bool)) *registrationChecker {
 	return &registrationChecker{
-		resolve:   queries.resolve,
-		rdapBases: sync.OnceValue(func() map[string]string { return fetchRDAPBootstrap(client, rdapBootstrapURL) }),
-		client:    client,
-		whois:     newWhoisClient().lookup,
+		resolve:   resolve,
+		rdapBases: rdapBases,
+		client:    &http.Client{Timeout: 10 * time.Second},
+		whois:     whois,
 		cache:     map[string]registration{},
 	}
 }
 
-// registrations is shared across a scan so each domain and the RDAP bootstrap are only
-// looked up once.
-var registrations = newRegistrationChecker()
+// defaultRDAPBases fetches IANA's RDAP bootstrap once, when first needed.
+func defaultRDAPBases() func() map[string]string {
+	client := &http.Client{Timeout: 10 * time.Second}
+	return sync.OnceValue(func() map[string]string { return fetchRDAPBootstrap(client, rdapBootstrapURL) })
+}
 
 func (r *registrationChecker) status(domain string) registration {
 	r.mu.Lock()

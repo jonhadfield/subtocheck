@@ -16,7 +16,9 @@ var (
 	protocols   = []string{"http", "https"}
 )
 
-func checkResponse(fqdn string, cnames []string, protocols []string, log *scanLog) (issues issues) {
+// checkResponse requests fqdn over each protocol and returns any findings and request
+// errors. dial, if not nil, makes the connections.
+func checkResponse(fqdn string, cnames []string, protocols []string, dial dialFunc, log *scanLog) (issues issues) {
 	var clientTransportTimeoutSecs = 3
 	var responseHeaderTimeoutSecs = 2
 
@@ -25,6 +27,7 @@ func checkResponse(fqdn string, cnames []string, protocols []string, log *scanLo
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
 		// each host is requested once, so idle connections would only be left open
 		DisableKeepAlives: true,
+		DialContext:       dial,
 	}
 	// request each protocol at once, so a host that does not respond costs one timeout
 	// rather than one per protocol; results are kept in protocol order

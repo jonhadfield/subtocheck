@@ -253,7 +253,7 @@ func TestRegisteredDomainWithNameserverOnExpiredDomain(t *testing.T) {
 }
 
 func TestQueryCacheSendsEachQueryOnce(t *testing.T) {
-	q := newDNSQueries()
+	q := newDNSQueries(defaultResolvers, "53")
 	var mu sync.Mutex
 	sent := 0
 	query := func() (*dns.Msg, error) {

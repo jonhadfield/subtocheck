@@ -27,12 +27,6 @@ func newDelegationChecker(q *dnsQueries, registration registrationLookup) *deleg
 	return &delegationChecker{resolve: q.resolve, ask: q.ask, registration: registration}
 }
 
-// queries and delegations are shared across a scan.
-var (
-	queries     = newDNSQueries()
-	delegations = newDelegationChecker(queries, registrations.status)
-)
-
 // check returns an issue for the first dangling delegation on the way to fqdn, or nil.
 func (c *delegationChecker) check(fqdn string, log *scanLog) *issue {
 	fqdn = strings.ToLower(strings.TrimSuffix(fqdn, "."))

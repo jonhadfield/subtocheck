@@ -127,7 +127,7 @@ func TestRedirectFingerprint(t *testing.T) {
 	defer server.Close()
 
 	host := strings.TrimPrefix(server.URL, "http://")
-	found := checkResponse(host, nil, []string{"http"}, nil)
+	found := checkResponse(host, nil, []string{"http"}, nil, nil)
 	if len(found) != 1 || found[0].platform != "Ghost" {
 		t.Fatalf("expected a Ghost issue, got %+v", found)
 	}

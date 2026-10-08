@@ -2,11 +2,15 @@ package subtocheck
 
 import (
 	"bufio"
+	"context"
+	"io"
+	"net"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/pkg/errors"
+	"golang.org/x/term"
 )
 
 // scanResult is the outcome of checking one domain.
@@ -30,11 +34,63 @@ type Options struct {
 	Workers    int    // domains checked at once; DefaultWorkers if not positive
 }
 
+// dialFunc makes a network connection, as net.Dialer.DialContext does.
+type dialFunc func(ctx context.Context, network, address string) (net.Conn, error)
+
+// environment is what a scan talks to. Scans use defaultEnvironment; tests replace parts of
+// it to run a whole scan against local servers.
+type environment struct {
+	resolvers []string // recursive resolvers, as host:port
+	dnsPort   string   // port authoritative nameservers are asked on
+	dial      dialFunc // makes HTTP connections; nil to dial normally
+	rdapBases func() map[string]string
+	whois     func(domain string) (string, bool)
+	stdout    io.Writer
+	terminal  bool // stdout is a terminal
+}
+
+func defaultEnvironment() environment {
+	return environment{
+		resolvers: defaultResolvers,
+		dnsPort:   "53",
+		rdapBases: defaultRDAPBases(),
+		whois:     newWhoisClient().lookup,
+		stdout:    os.Stdout,
+		terminal:  term.IsTerminal(int(os.Stdout.Fd())),
+	}
+}
+
+// scanner holds what one scan shares between domains: its environment, the DNS responses
+// and registrations already looked up, and its log.
+type scanner struct {
+	env           environment
+	queries       *dnsQueries
+	delegations   *delegationChecker
+	registrations *registrationChecker
+	log           *scanLog
+}
+
+func newScanner(env environment, log *scanLog) *scanner {
+	q := newDNSQueries(env.resolvers, env.dnsPort)
+	registrations := newRegistrationChecker(q.resolve, env.rdapBases, env.whois)
+	return &scanner{
+		env:           env,
+		queries:       q,
+		delegations:   newDelegationChecker(q, registrations.status),
+		registrations: registrations,
+		log:           log,
+	}
+}
+
 // CheckDomains is called from cmd/subtocheck/main.go to scan the domains listed in the
 // file at path. Findings are shown as they are found and every issue is written to the log.
 // It returns the number of potential takeovers found, including those to verify manually,
 // and an error if the domains could not be read or the report could not be emailed.
 func CheckDomains(path string, opts Options) (int, error) {
+	return scan(path, opts, defaultEnvironment())
+}
+
+func scan(path string, opts Options, env environment) (int, error) {
 	var conf config
 	if opts.ConfigPath != "" {
 		conf = readConfig(opts.ConfigPath)
@@ -59,7 +115,8 @@ func CheckDomains(path string, opts Options) (int, error) {
 	}
 	log := newScanLog(logPath, opts.Debug)
 	// JSON output replaces the console's, so stdout holds only the JSON
-	con := newConsole(opts.Quiet || opts.JSON, len(domains))
+	con := newConsole(env.stdout, env.terminal, opts.Quiet || opts.JSON, len(domains))
+	s := newScanner(env, log)
 
 	jobs := make(chan string, len(domains))
 	results := make(chan scanResult, len(domains))
@@ -68,7 +125,7 @@ func CheckDomains(path string, opts Options) (int, error) {
 		workers = DefaultWorkers
 	}
 	for w := 1; w <= workers; w++ {
-		go worker(w, jobs, results, log)
+		go s.worker(w, jobs, results)
 	}
 	for _, domain := range domains {
 		jobs <- domain
@@ -111,7 +168,7 @@ func CheckDomains(path string, opts Options) (int, error) {
 	con.summary(pIssues, elapsed, summaryLogPath, logErr)
 	r := newReport(pIssues, len(domains), elapsed, summaryLogPath)
 	if opts.JSON {
-		if err := writeJSON(os.Stdout, newJSONReport(r, pIssues)); err != nil {
+		if err := writeJSON(env.stdout, newJSONReport(r, pIssues)); err != nil {
 			return 0, errors.Wrap(err, "failed to write JSON")
 		}
 	}
@@ -131,10 +188,11 @@ func CheckDomains(path string, opts Options) (int, error) {
 	return findings, nil
 }
 
-func worker(id int, jobs <-chan string, results chan<- scanResult, log *scanLog) {
+func (s *scanner) worker(id int, jobs <-chan string, results chan<- scanResult) {
+	log := s.log
 	for domain := range jobs {
 		log.debugf("worker %d: checking %s", id, domain)
-		found, cnames := checkResolves(domain, log)
+		found, cnames := s.checkResolves(domain)
 		if len(found) == 0 {
 			// a name that resolves can still be delegated to a nameserver on a domain anyone
 			// could register; names that fail to resolve are walked by checkResolves. The walk
@@ -143,9 +201,9 @@ func worker(id int, jobs <-chan string, results chan<- scanResult, log *scanLog)
 			walked := make(chan struct{})
 			go func() {
 				defer close(walked)
-				dangling = delegations.check(domain, log)
+				dangling = s.delegations.check(domain, log)
 			}()
-			responses := checkResponse(domain, cnames, protocols, log)
+			responses := checkResponse(domain, cnames, protocols, s.env.dial, log)
 			<-walked
 			if dangling != nil {
 				found = append(found, *dangling)

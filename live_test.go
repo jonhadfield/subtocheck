@@ -176,7 +176,7 @@ var liveDNSHosts = []struct{ platform, nameserver, zone string }{
 const unhostedZone = "subtocheck-unhosted-7f3k2.com"
 
 func TestLiveDNSHosts(t *testing.T) {
-	c := newDelegationChecker(newDNSQueries(), nil)
+	c := newDelegationChecker(newDNSQueries(defaultResolvers, "53"), nil)
 	for _, h := range liveDNSHosts {
 		t.Run(h.platform, func(t *testing.T) {
 			if p, ok := nsProvider([]string{h.nameserver}); !ok || p.platform != h.platform {
@@ -196,7 +196,7 @@ func TestLiveDNSHosts(t *testing.T) {
 const unregisteredName = "subtocheck-unreg-7f3k2"
 
 func TestLiveRegistries(t *testing.T) {
-	r := newRegistrationChecker()
+	r := newRegistrationChecker(newDNSQueries(defaultResolvers, "53").resolve, defaultRDAPBases(), newWhoisClient().lookup)
 	// .com, .org and .co.uk are answered by RDAP; the rest by WHOIS, as their registries
 	// have no RDAP service
 	for _, tld := range []string{"com", "org", "co.uk", "io", "co", "de", "ru", "jp", "me"} {
