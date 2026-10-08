@@ -1,5 +1,17 @@
 package subtocheck
 
+type issue struct {
+	kind     string // vuln, request, dns
+	platform string
+	fqdn     string
+	url      string
+	err      error
+	detail   string // for findings, extra context shown after the platform
+	edgeCase bool   // for findings, takeover depends on provider conditions
+}
+
+type issues []issue
+
 type processedIssues struct {
 	potVulns []issue
 	DNS      []issue

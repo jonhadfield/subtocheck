@@ -10,7 +10,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
-	"golang.org/x/term"
 )
 
 var (
@@ -51,10 +50,12 @@ type console struct {
 	seen        map[string]bool // findings already shown, as fqdn and platform
 }
 
-func newConsole(quiet bool, total int) *console {
+// newConsole writes to out; terminal says whether out is a terminal, which the progress bar
+// needs.
+func newConsole(out io.Writer, terminal, quiet bool, total int) *console {
 	return &console{
-		out:         colorprofile.NewWriter(os.Stdout, os.Environ()),
-		interactive: !quiet && term.IsTerminal(int(os.Stdout.Fd())),
+		out:         colorprofile.NewWriter(out, os.Environ()),
+		interactive: !quiet && terminal,
 		quiet:       quiet,
 		total:       total,
 		seen:        map[string]bool{},

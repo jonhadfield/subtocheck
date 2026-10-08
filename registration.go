@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/pkg/errors"
 	"golang.org/x/net/publicsuffix"
 )
 
@@ -64,20 +65,21 @@ type registrationChecker struct {
 	cache map[string]registration
 }
 
-func newRegistrationChecker() *registrationChecker {
-	client := &http.Client{Timeout: 10 * time.Second}
+func newRegistrationChecker(resolve func(string, uint16) (*dns.Msg, error), rdapBases func() map[string]string, whois func(string) (string, bool)) *registrationChecker {
 	return &registrationChecker{
-		resolve:   queries.resolve,
-		rdapBases: sync.OnceValue(func() map[string]string { return fetchRDAPBootstrap(client, rdapBootstrapURL) }),
-		client:    client,
-		whois:     newWhoisClient().lookup,
+		resolve:   resolve,
+		rdapBases: rdapBases,
+		client:    &http.Client{Timeout: 10 * time.Second},
+		whois:     whois,
 		cache:     map[string]registration{},
 	}
 }
 
-// registrations is shared across a scan so each domain and the RDAP bootstrap are only
-// looked up once.
-var registrations = newRegistrationChecker()
+// defaultRDAPBases fetches IANA's RDAP bootstrap once, when first needed.
+func defaultRDAPBases() func() map[string]string {
+	client := &http.Client{Timeout: 10 * time.Second}
+	return sync.OnceValue(func() map[string]string { return fetchRDAPBootstrap(client, rdapBootstrapURL) })
+}
 
 func (r *registrationChecker) status(domain string) registration {
 	r.mu.Lock()
@@ -203,4 +205,59 @@ func registeredDomain(host string) string {
 		return ""
 	}
 	return domain
+}
+
+// registrationIssue reports that something fqdn depends on, described by subject, is on a
+// domain that anyone could register, or nil if the domain's status gives no such reason.
+func registrationIssue(fqdn, subject, domain string, reg registration, now time.Time) *issue {
+	finding := func(platform, detail string, edgeCase bool) *issue {
+		return &issue{
+			kind:     "vuln",
+			platform: platform,
+			fqdn:     fqdn,
+			url:      fqdn,
+			err:      errors.Errorf("%s: %s", subject, detail),
+			detail:   subject + "; " + detail,
+			edgeCase: edgeCase,
+		}
+	}
+	switch reg.status {
+	case statusUnregistered:
+		return finding("Unregistered domain", domain+" is not registered, so may be available to register", false)
+	case statusUnconfirmed:
+		return finding("Unregistered domain", domain+" has no DNS and its registry could not confirm whether it is registered", true)
+	case statusUndelegated:
+		platform, detail := lifecycle(domain, reg, now)
+		return finding(platform, detail, true)
+	default:
+		return nil
+	}
+}
+
+// lifecycle describes how far a registered domain without nameservers is through expiry,
+// from the registry's status values and expiry date, most advanced stage first.
+func lifecycle(domain string, reg registration, now time.Time) (platform, detail string) {
+	expired := !reg.expires.IsZero() && reg.expires.Before(now)
+	switch {
+	case reg.has("pending delete"):
+		platform, detail = "Domain pending deletion", domain+" is pending deletion, so will be available to register within days"
+	case reg.has("redemption period"):
+		platform, detail = "Domain in redemption", domain+" is in its redemption period: unless the registrant restores it, it will be deleted and available to register"
+	case reg.has("client hold") || reg.has("server hold"):
+		platform, detail = "Domain on hold", domain+" is registered but on hold, so it does not resolve"
+	case reg.has("auto renew period") || expired:
+		platform, detail = "Expired domain", domain+" has expired and is in its renewal grace period"
+	default:
+		platform, detail = "Undelegated domain", domain+" is registered but has no nameservers"
+		if reg.expires.IsZero() {
+			detail += ", so its registration may have expired"
+		}
+	}
+	switch {
+	case expired:
+		detail += " (expired " + reg.expires.Format("2006-01-02") + ")"
+	case !reg.expires.IsZero():
+		detail += " (expires " + reg.expires.Format("2006-01-02") + ")"
+	}
+	return platform, detail
 }
