@@ -24,7 +24,12 @@ func checkResponse(fqdn string, cnames []string, protocols []string, dial dialFu
 
 	tr := &http.Transport{
 		ResponseHeaderTimeout: time.Duration(responseHeaderTimeoutSecs) * time.Second,
-		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
+		// Certificates are deliberately not verified. A dangling name is answered by the
+		// provider it points at, with the provider's own certificate rather than one for the
+		// name, and those are the responses subtocheck must read: verifying would hide most
+		// takeovers found over https. Responses are only matched against fingerprints;
+		// nothing is sent and nothing in them is trusted.
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		// each host is requested once, so idle connections would only be left open
 		DisableKeepAlives: true,
 		DialContext:       dial,
