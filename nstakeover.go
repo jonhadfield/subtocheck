@@ -1,10 +1,7 @@
 package subtocheck
 
 import (
-	"math/rand/v2"
-	"net"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/miekg/dns"
@@ -28,80 +25,6 @@ type delegationChecker struct {
 
 func newDelegationChecker(q *dnsQueries, registration registrationLookup) *delegationChecker {
 	return &delegationChecker{resolve: q.resolve, ask: q.ask, registration: registration}
-}
-
-// dnsQueries sends DNS queries and caches the responses, and failures, for the rest of the
-// scan: the domains in a scan share zones, nameservers and registrations, so most walks
-// repeat queries already made.
-type dnsQueries struct {
-	client *dns.Client
-	mu     sync.Mutex
-	cache  map[string]*cachedQuery
-}
-
-type cachedQuery struct {
-	once sync.Once
-	resp *dns.Msg
-	err  error
-}
-
-func newDNSQueries() *dnsQueries {
-	return &dnsQueries{client: &dns.Client{Timeout: 2 * time.Second}, cache: map[string]*cachedQuery{}}
-}
-
-// resolve sends a recursive query to a public resolver.
-func (q *dnsQueries) resolve(name string, qtype uint16) (*dns.Msg, error) {
-	return q.cached("resolver", name, qtype, func() (*dns.Msg, error) {
-		return q.exchange(nameservers[rand.IntN(len(nameservers))], name, qtype, true)
-	})
-}
-
-// ask sends a non-recursive query to the nameserver at ip.
-func (q *dnsQueries) ask(ip, name string, qtype uint16) (*dns.Msg, error) {
-	return q.cached(ip, name, qtype, func() (*dns.Msg, error) {
-		return q.exchange(ip, name, qtype, false)
-	})
-}
-
-func (q *dnsQueries) cached(server, name string, qtype uint16, query func() (*dns.Msg, error)) (*dns.Msg, error) {
-	key := server + "|" + strings.ToLower(name) + "|" + dns.TypeToString[qtype]
-	q.mu.Lock()
-	entry, ok := q.cache[key]
-	if !ok {
-		entry = &cachedQuery{}
-		q.cache[key] = entry
-	}
-	q.mu.Unlock()
-	// concurrent callers for the same query wait for the one in flight
-	entry.once.Do(func() { entry.resp, entry.err = query() })
-	return entry.resp, entry.err
-}
-
-func (q *dnsQueries) exchange(server, name string, qtype uint16, recurse bool) (*dns.Msg, error) {
-	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn(name), qtype)
-	m.RecursionDesired = recurse
-	return exchangeDNS(q.client, m, net.JoinHostPort(server, "53"))
-}
-
-// ednsBufferSize is the UDP payload size advertised with EDNS, as recommended to avoid
-// fragmentation. Without EDNS, replies are limited to 512 bytes, which signed zones often
-// exceed.
-const ednsBufferSize = 1232
-
-// exchangeDNS sends a query to address (host:port) over UDP with EDNS, and again over TCP
-// if the reply was truncated, as a truncated reply can leave out the records asked for.
-func exchangeDNS(client *dns.Client, m *dns.Msg, address string) (*dns.Msg, error) {
-	if m.IsEdns0() == nil {
-		m.SetEdns0(ednsBufferSize, false)
-	}
-	r, _, err := client.Exchange(m, address)
-	if err == nil && r != nil && r.Truncated {
-		tcp := *client
-		tcp.Net = "tcp"
-		r, _, err = tcp.Exchange(m, address)
-	}
-	return r, err
 }
 
 // queries and delegations are shared across a scan.

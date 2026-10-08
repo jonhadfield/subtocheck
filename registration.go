@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"github.com/pkg/errors"
 	"golang.org/x/net/publicsuffix"
 )
 
@@ -203,4 +204,59 @@ func registeredDomain(host string) string {
 		return ""
 	}
 	return domain
+}
+
+// registrationIssue reports that something fqdn depends on, described by subject, is on a
+// domain that anyone could register, or nil if the domain's status gives no such reason.
+func registrationIssue(fqdn, subject, domain string, reg registration, now time.Time) *issue {
+	finding := func(platform, detail string, edgeCase bool) *issue {
+		return &issue{
+			kind:     "vuln",
+			platform: platform,
+			fqdn:     fqdn,
+			url:      fqdn,
+			err:      errors.Errorf("%s: %s", subject, detail),
+			detail:   subject + "; " + detail,
+			edgeCase: edgeCase,
+		}
+	}
+	switch reg.status {
+	case statusUnregistered:
+		return finding("Unregistered domain", domain+" is not registered, so may be available to register", false)
+	case statusUnconfirmed:
+		return finding("Unregistered domain", domain+" has no DNS and its registry could not confirm whether it is registered", true)
+	case statusUndelegated:
+		platform, detail := lifecycle(domain, reg, now)
+		return finding(platform, detail, true)
+	default:
+		return nil
+	}
+}
+
+// lifecycle describes how far a registered domain without nameservers is through expiry,
+// from the registry's status values and expiry date, most advanced stage first.
+func lifecycle(domain string, reg registration, now time.Time) (platform, detail string) {
+	expired := !reg.expires.IsZero() && reg.expires.Before(now)
+	switch {
+	case reg.has("pending delete"):
+		platform, detail = "Domain pending deletion", domain+" is pending deletion, so will be available to register within days"
+	case reg.has("redemption period"):
+		platform, detail = "Domain in redemption", domain+" is in its redemption period: unless the registrant restores it, it will be deleted and available to register"
+	case reg.has("client hold") || reg.has("server hold"):
+		platform, detail = "Domain on hold", domain+" is registered but on hold, so it does not resolve"
+	case reg.has("auto renew period") || expired:
+		platform, detail = "Expired domain", domain+" has expired and is in its renewal grace period"
+	default:
+		platform, detail = "Undelegated domain", domain+" is registered but has no nameservers"
+		if reg.expires.IsZero() {
+			detail += ", so its registration may have expired"
+		}
+	}
+	switch {
+	case expired:
+		detail += " (expired " + reg.expires.Format("2006-01-02") + ")"
+	case !reg.expires.IsZero():
+		detail += " (expires " + reg.expires.Format("2006-01-02") + ")"
+	}
+	return platform, detail
 }
