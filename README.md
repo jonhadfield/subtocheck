@@ -85,7 +85,7 @@ Response fingerprint:
 | UptimeRobot | UserVoice ✓ | Wasabi ✓ |
 | WordPress.com ✓ | Wufoo ✓ |  |
 
-Edge cases, reported with a note to verify manually, as takeover depends on conditions such as the provider's domain verification: GitHub Pages ✓, Heroku ✓, Tilda ✓, Tumblr ✓, Wix. The current Azure Front Door and Ngrok pages are also reported to verify manually: Front Door validates custom domains, and Ngrok shows the same page when a configured endpoint is simply offline.
+Edge cases, reported with a note to verify manually, as takeover depends on conditions such as the provider's domain verification: GitHub Pages ✓, Heroku ✓, Netlify ✓, Tilda ✓, Tumblr ✓, Vercel ✓, Wix. Shopify and Webflow are not checked: neither serves a distinctive page for a domain it does not know. The current Azure Front Door and Ngrok pages are also reported to verify manually: Front Door validates custom domains, and Ngrok shows the same page when a configured endpoint is simply offline.
 
 ## <a name="install-and-run"></a>install and run
 

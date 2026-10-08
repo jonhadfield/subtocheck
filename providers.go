@@ -204,6 +204,16 @@ var vPatterns = []vPattern{
 		bodyStringMatch: "all",
 	},
 	{
+		// verified live October 2026. Netlify may require verification of a domain already
+		// used by another site, so takeover is not assured.
+		platform:        "Netlify",
+		edgeCase:        true,
+		responseCodes:   []int{404},
+		bodyStrings:     []string{"Not Found - Request ID:"},
+		bodyStringMatch: "all",
+		headerStrings:   []string{"server: netlify"},
+	},
+	{
 		// verified live October 2026. Also shown when a configured endpoint's agent is just
 		// not running, so takeover is not assured.
 		platform:        "Ngrok",
@@ -302,6 +312,16 @@ var vPatterns = []vPattern{
 		responseCodes:   []int{404},
 		bodyStrings:     []string{"Not found.", "assets.tumblr.com", "Whatever you were looking for doesn't currently exist at this address"},
 		bodyStringMatch: "all",
+	},
+	{
+		// verified live October 2026. Vercel requires verification of a domain already used
+		// by another account, so takeover is not assured.
+		platform:        "Vercel",
+		edgeCase:        true,
+		responseCodes:   []int{404},
+		bodyStrings:     []string{"DEPLOYMENT_NOT_FOUND"},
+		bodyStringMatch: "all",
+		headerStrings:   []string{"x-vercel-error: deployment_not_found"},
 	},
 	{
 		// verified live October 2026, through an unclaimed uservoice.com subdomain only, so a
