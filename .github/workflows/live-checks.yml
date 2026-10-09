@@ -10,6 +10,8 @@ on:
   pull_request:
     paths:
       - providers.go
+      - dns.go
+      - http.go
       - nstakeover.go
       - registration.go
       - whois.go
