@@ -307,3 +307,25 @@ func TestScanOfHealthyDomainsFindsNothing(t *testing.T) {
 		t.Errorf("expected no log for a scan with nothing to record, got %v", err)
 	}
 }
+
+func TestScanReadsDomainsFromStdin(t *testing.T) {
+	var stdout bytes.Buffer
+	env := testEnvironment(t, scanInternet, scanPages, &stdout)
+	env.stdin = strings.NewReader("ok.example.test\n\n  s3.example.test  \n")
+
+	findings, err := scan("-", Options{LogPath: filepath.Join(t.TempDir(), "scan.log"), JSON: true}, env)
+	if err != nil || findings != 1 {
+		t.Fatalf("expected 1 finding from the domains on stdin, got %d (%v)", findings, err)
+	}
+	if !strings.Contains(stdout.String(), `"domains": 2`) || !strings.Contains(stdout.String(), `"host": "s3.example.test"`) {
+		t.Errorf("expected both domains from stdin to be scanned:\n%s", stdout.String())
+	}
+}
+
+func TestScanWithMissingDomainsFile(t *testing.T) {
+	var stdout bytes.Buffer
+	env := testEnvironment(t, scanInternet, scanPages, &stdout)
+	if _, err := scan(filepath.Join(t.TempDir(), "missing.txt"), Options{}, env); err == nil || !strings.Contains(err.Error(), "failed to read domains list") {
+		t.Errorf("expected an error reading a missing domains file, got %v", err)
+	}
+}

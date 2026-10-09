@@ -45,6 +45,7 @@ type environment struct {
 	dial      dialFunc // makes HTTP connections; nil to dial normally
 	rdapBases func() map[string]string
 	whois     func(domain string) (string, bool)
+	stdin     io.Reader // the domain list when its path is "-"
 	stdout    io.Writer
 	terminal  bool // stdout is a terminal
 }
@@ -55,6 +56,7 @@ func defaultEnvironment() environment {
 		dnsPort:   "53",
 		rdapBases: defaultRDAPBases(),
 		whois:     newWhoisClient().lookup,
+		stdin:     os.Stdin,
 		stdout:    os.Stdout,
 		terminal:  term.IsTerminal(int(os.Stdout.Fd())),
 	}
@@ -95,18 +97,10 @@ func scan(path string, opts Options, env environment) (int, error) {
 	if opts.ConfigPath != "" {
 		conf = readConfig(opts.ConfigPath)
 	}
-	file, err := os.Open(path)
+	domains, err := readDomains(path, env.stdin)
 	if err != nil {
-		return 0, errors.Wrap(err, "failed to read domains list")
+		return 0, err
 	}
-	var domains []string
-	domainScanner := bufio.NewScanner(file)
-	for domainScanner.Scan() {
-		if entry := strings.TrimSpace(domainScanner.Text()); entry != "" {
-			domains = append(domains, entry)
-		}
-	}
-	_ = file.Close()
 
 	start := time.Now()
 	logPath := opts.LogPath
@@ -212,4 +206,29 @@ func (s *scanner) worker(id int, jobs <-chan string, results chan<- scanResult) 
 		}
 		results <- scanResult{domain: domain, issues: found}
 	}
+}
+
+// readDomains reads the domain list, one name per line, from the file at path, or from
+// stdin if path is "-". Blank lines are skipped.
+func readDomains(path string, stdin io.Reader) ([]string, error) {
+	in := stdin
+	if path != "-" {
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to read domains list")
+		}
+		defer func() { _ = file.Close() }()
+		in = file
+	}
+	var domains []string
+	scanner := bufio.NewScanner(in)
+	for scanner.Scan() {
+		if entry := strings.TrimSpace(scanner.Text()); entry != "" {
+			domains = append(domains, entry)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, errors.Wrap(err, "failed to read domains list")
+	}
+	return domains, nil
 }
