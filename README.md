@@ -1,189 +1,76 @@
-
 # subtocheck: Subdomain Takeover Checker
 [![test](https://github.com/jonhadfield/subtocheck/actions/workflows/test.yml/badge.svg)](https://github.com/jonhadfield/subtocheck/actions/workflows/test.yml)
 
-- [about](#about)
-- [compatibility](#compatibility)
-- [what is a subdomain takeover?](#what-is-a-subdomain-takeover)
-- [how does subtocheck work?](#how-does-subtocheck-work)
-- [install and run](#install-and-run)
-- [sending email reports](#sending-email-reports)
-- [contributing](#contributing)
+subtocheck checks a list of domain names for ones that someone else could take over, and reports:
 
-## <a name="about"></a>about
+- **dangling CNAMEs**: records pointing at a provider's resource that no longer exists, or at a domain that is unregistered or expiring;
+- **dangling DNS delegations**: names delegated to DNS hosts that no longer serve their zone, entirely or in part, or to nameservers on an unregistered domain;
+- **unclaimed services**: names whose provider answers with its "no such site" page, matched against fingerprints for over 40 providers, most confirmed against the live provider every week.
 
-subtocheck is a command line tool that accepts a list of FQDNs (Fully Qualified Domain Names) to see if they're vulnerable to being taken over.
+It only detects; it never attempts to claim anything.
 
-## <a name="compatibility"></a>compatibility
+## What is a subdomain takeover?
 
-Only tested on Linux and MacOS, but should work on others.
+If you host a service with a provider such as AWS S3 or Heroku, point a DNS record at it, then delete the service but leave the DNS record, someone else may be able to create a service with the provider that answers for your domain. Many providers do not ask you to prove you own a domain before serving content for it, so if you move out, someone else can move in. It is up to the domain's owner to make sure DNS only points at a provider while the service is live.
 
-## <a name="what-is-a-subdomain-takeover"></a>what is a subdomain takeover?
+## Install
 
-If you host a service on certain hosting providers, e.g. AWS S3 and Heroku, point a DNS record to the provider and then delete your service from that provider (but leave your DNS pointing at the provider), it is possible for someone else to create a new service on that provider that responds to requests for your domain.
-This is possible because a number of providers do not ask you to prove you own the domain before hosting your content. In other words, if you move out, someone else can move in and take advantage of your own domain still pointing to the provider.
-The onus is on the customer to ensure their DNS only resolves to the provider whilst that service is live.
-
-## <a name="how-does-subtocheckwork"></a>how does subtocheck work?
-
-subtocheck performs these checks for each FQDN:
-- DNS resolution, following any CNAME records
-- A request to the root of the domain over http and https
-- Test each response against a provider that no longer has a service configured
-
-If the name has a CNAME whose target does not exist (NXDOMAIN), the record is dangling. Where the target belongs to a provider that lets anyone register a deleted resource's name again, such as Azure App Service, that is reported as a potential vulnerability without any request being needed. For other dangling CNAMEs, subtocheck checks whether the target's domain is registered, using DNS and the registry's [RDAP](https://about.rdap.org/) service, or its WHOIS server for registries without RDAP (such as `.io`, `.de` and `.jp`). If the registry has no record of it, anyone could register it and serve content for your name, so it is reported as a potential takeover. Registries also report names they reserve as unregistered, though those cannot be bought. A domain that is registered but has no nameservers is reported to verify manually, with how far through expiry the registry says it is, and its expiry date:
-
-| Registry status | Reported as |
-|---|---|
-| pending delete | Domain pending deletion: available to register within days |
-| redemption period | Domain in redemption: deleted and released unless the registrant restores it |
-| client or server hold | Domain on hold: registered but suspended |
-| auto renew period, or an expiry date in the past | Expired domain: in its renewal grace period |
-| none of these | Undelegated domain |
-
-A domain whose registry cannot confirm either way is also reported to verify manually. Dangling CNAMEs to a domain that is registered, or within your own domain, are reported as DNS issues.
-
-If resolvers fail to answer for the name (SERVFAIL or REFUSED), subtocheck follows its delegations from the top-level domain down, asking each zone's nameservers directly. A name delegated to nameservers that do not serve its zone, usually because the zone was deleted from the DNS host, is a dangling delegation. Where the host lets any account create a zone of that name, whoever does so controls every record under it, so it is reported as a potential takeover; otherwise it is reported as a DNS issue. A delegation can also be partly dangling: some of its nameservers serve the zone and others do not. Resolvers pick nameservers at random, so if those that do not serve it are on a host where anyone can create the zone, whoever does so answers a share of its queries; this is reported as a potential takeover, and any other partly dangling delegation as a DNS issue.
-
-The same walk runs for every name that resolves, to find nameservers whose hostname does not exist and whose domain is not registered. Whoever registers that domain answers a share of the queries for the zone, even if its other nameservers are healthy, so this is reported as a potential takeover. Only public DNS and registries' RDAP services are queried.
-
-Otherwise, if the name cannot be resolved then the FQDN is not in public DNS and therefore it isn't vulnerable to a public subdomain takeover.
-
-If the name can be resolved but responses cannot be retrieved over http nor https then it isn't vulnerable to a public subdomain takeover.
-
-If the response (over http and/or https) can be retrieved, then check the built-in signatures for a provider match. A provider match indicates someone may be able to host a service for your domain. subtocheck only detects; it never attempts to claim anything.
-
-#### providers checked
-
-Providers and fingerprints are based on [can-i-take-over-xyz](https://github.com/EdOverflow/can-i-take-over-xyz), the [nuclei takeover templates](https://github.com/projectdiscovery/nuclei-templates/tree/main/http/takeovers) and Microsoft's [dangling DNS guidance](https://learn.microsoft.com/en-us/azure/security/fundamentals/subdomain-takeover). Fingerprints marked ✓ are confirmed against the live provider every week by the `live checks` workflow; the rest could not be checked automatically, as the provider blocks such requests or has no page to probe.
-
-Dangling CNAME to:
-- AWS Elastic Beanstalk
-- Azure: App Service, Cloud Services, Public IP addresses, Traffic Manager, Blob Storage, CDN, Front Door, Container Instances, API Management
-- Discourse
-
-Dangling NS delegation to (from [can-i-take-over-dns](https://github.com/indianajson/can-i-take-over-dns)):
-- DigitalOcean, DNS Made Easy, Hurricane Electric, Linode, Reg.ru, TierraNet
-- Domain.com, Name.com and Yahoo Small Business, where takeover requires a paid account
-- Edge cases, reported to verify manually: Azure DNS, DreamHost, Google Cloud DNS
-
-Response fingerprint:
-
-| | | |
-|---|---|---|
-| Agile CRM | Airee.ru ✓ | Anima ✓ |
-| Azure Front Door ✓ | Bitbucket ✓ | Campaign Monitor ✓ |
-| Canny ✓ | Cargo Collective ✓ | Framer ✓ |
-| Gemfury ✓ | GetResponse ✓ | Ghost ✓ |
-| GitBook ✓ | HatenaBlog ✓ | Help Juice ✓ |
-| Help Scout ✓ | Helprace | JetBrains YouTrack |
-| LaunchRock ✓ | Leadpages ✓ | Ngrok ✓ |
-| Pantheon ✓ | Pingdom ✓ | Readme.io |
-| Read the Docs | S3 ✓ | Short.io ✓ |
-| SmartJobBoard ✓ | SmugMug | Strikingly |
-| Surge.sh ✓ | SurveySparrow | Uberflip ✓ |
-| UptimeRobot | UserVoice ✓ | Wasabi ✓ |
-| WordPress.com ✓ | Wufoo ✓ |  |
-
-Edge cases, reported with a note to verify manually, as takeover depends on conditions such as the provider's domain verification: GitHub Pages ✓, Heroku ✓, Netlify ✓, Tilda ✓, Tumblr ✓, Vercel ✓, Wix. Shopify and Webflow are not checked: neither serves a distinctive page for a domain it does not know. The current Azure Front Door and Ngrok pages are also reported to verify manually: Front Door validates custom domains, and Ngrok shows the same page when a configured endpoint is simply offline.
-
-## <a name="install-and-run"></a>install and run
-
-On macOS and linux, using [homebrew](https://brew.sh):
+On macOS and Linux, using [Homebrew](https://brew.sh):
 
 ```bash
 brew install jonhadfield/tap/subtocheck
 ```
 
-On macOS you can also use the signed installer:
+On macOS you can also use the signed, notarized installer, which puts `subtocheck` in `/usr/local/bin`:
 
 ```bash
 curl -fsSL https://github.com/jonhadfield/subtocheck/releases/latest/download/subtocheck_macos.pkg -o /tmp/subtocheck.pkg && sudo installer -pkg /tmp/subtocheck.pkg -target /
 ```
 
-That puts `subtocheck` in `/usr/local/bin`. The package is notarized with a
-stapled ticket, so it installs with no Gatekeeper warning.
-
-On linux, install the latest release for your architecture:
+On Linux, install the latest release for your architecture:
 
 ```bash
 curl -fsSL "https://github.com/jonhadfield/subtocheck/releases/latest/download/subtocheck_linux_$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/').tar.gz" | sudo tar -xz -C /usr/local/bin subtocheck
 ```
 
-Otherwise, download the latest release [here](https://github.com/jonhadfield/subtocheck/releases) and then install:
+Otherwise, download the latest release for your platform from the [releases page](https://github.com/jonhadfield/subtocheck/releases) and install it with `install <subtocheck binary> /usr/local/bin/subtocheck` (`sudo install` on Linux). On macOS, a binary downloaded through a browser is quarantined and Gatekeeper will refuse to run it; Homebrew and the installer handle this, but for a downloaded tarball, clear the flag with `xattr -d com.apple.quarantine /usr/local/bin/subtocheck`.
 
-```bash
-install <subtocheck binary> /usr/local/bin/subtocheck
+## Quick start
+
+List the names to check, one per line, in `domains.txt`:
+
 ```
-_use: `sudo install` if on linux_
-
-On macOS, a binary downloaded through a browser is quarantined, and Gatekeeper
-will refuse to run it. Homebrew and the `.pkg` above both handle this; if you
-took a tarball instead, clear the flag manually:
-
-```bash
-xattr -d com.apple.quarantine /usr/local/bin/subtocheck
+login.example.com
+shop.example.com
+static.example.com
 ```
 
-### run
-
-Add your list of domains to a file called 'domains.txt' (you can override with --domains option)
-
-    login.example.com
-    shop.example.com
-    static.example.com
-
-Run subtocheck
+Then run:
 
 ```bash
 subtocheck
 ```
 
-On a terminal, subtocheck shows a progress bar while it scans and prints each potential takeover in colour as soon as it is found:
+On a terminal, a progress bar shows while it scans, and each potential takeover is printed as soon as it is found:
 
-- `TAKEOVER` (red): the response or DNS matches a provider that lets anyone claim the name
-- `VERIFY` (yellow): an edge case, where takeover depends on the provider's conditions, so check it manually
+- `TAKEOVER` (red): the DNS or response matches a provider that lets anyone claim the name;
+- `VERIFY` (yellow): an edge case, where takeover depends on the provider's conditions, so check it manually.
 
-A summary follows with counts of findings, DNS issues and request errors. The details of every issue, including each DNS and request error, are written to a log file, `subtocheck-<timestamp>.log` in the current directory by default. The file is only created if there is something to record.
+A summary follows, and the details of every issue are written to a log file.
 
-Options:
+## Options
 
 | Option | |
 |---|---|
 | `--domains <path>` | domain list file (default `domains.txt`) |
-| `--log <path>` | log file path |
+| `--log <path>` | log file path (default `subtocheck-<timestamp>.log`) |
+| `--json` | write the result to stdout as JSON instead of console output |
+| `--config <path>` | email a report after each scan |
 | `--quiet` | no console output; the log file is still written |
-| `--json` | write the result to stdout as JSON instead of console output (see below) |
 | `--debug` | also write debug messages to the log file |
-| `--config <path>` | email configuration (see below) |
 | `--workers <n>` | domains checked at once (default 10); more are faster, but busy hosts time out more often, and a timed-out request is a check not made |
 
-When the output is not a terminal, for example piped or run from cron, the progress bar and colours are left out. Colour can also be turned off with `NO_COLOR=1`.
-
-With `--json`, the result is written to stdout as a single JSON document, for other tools to consume:
-
-```json
-{
-  "domains": 3,
-  "duration_seconds": 0.5,
-  "summary": { "takeovers": 1, "verify": 0, "dns_issues": 1, "request_errors": 0 },
-  "findings": [
-    {
-      "host": "app.example.com",
-      "platform": "Framer",
-      "kind": "takeover",
-      "urls": ["http://app.example.com", "https://app.example.com"]
-    }
-  ],
-  "dns_issues": [{ "target": "old.example.com", "error": "old.example.com could not be resolved (...)" }],
-  "request_errors": [],
-  "log": "subtocheck-20261007-071203.log"
-}
-```
-
-A finding's `kind` is `takeover`, or `verify` for edge cases to check manually; it may also have a `detail`. Lists are empty rather than absent, and `log` is left out when no log was written.
-
-Exit status, for scripts and CI:
+## Exit status
 
 | Status | Meaning |
 |---|---|
@@ -191,57 +78,9 @@ Exit status, for scripts and CI:
 | `1` | an error, such as a missing domains file or a failure to send the email report |
 | `2` | at least one potential takeover found, including those to verify manually |
 
-## <a name="sending-email-reports"></a>sending email reports
+## Documentation
 
-SMTP (TLS Only) and AWS SES (Simple Email Service) are supported. If defined, a report is emailed after each scan, with a plain text and an HTML version. Its subject gives the number of potential takeovers and those to verify, after the configured subject (default "subtocheck scan"). It lists each finding, as TAKEOVER or VERIFY, with its platform, the detail of what was found and the URLs it was found at, along with counts of DNS issues and request errors. The scan's log, with every issue in detail, is attached.
-
-Email configuration is defined as YAML. For SMTP create a file containing this configuration:
-
-    email:
-      provider: smtp
-      host: "<SMTP HOST>"
-      port: "<SMTP PORT>"
-      username: "<USER ID>"
-      password: "<PASSWORD>"
-      subject: "<EMAIL SUBJECT>"
-      source: "<FROM ADDRESS>"
-      recipients:
-        - "<EMAIL RECIPIENT 1>"
-        - "<EMAIL RECIPIENT 2>"
-        ...
-        
-For SES, use the following:
-
-    email:
-      provider: ses
-      region: "<AWS REGION>"
-      subject: "<EMAIL SUBJECT>"
-      source: "<FROM ADDRESS>"
-      recipients:
-        - "<EMAIL RECIPIENT 1>"
-        - "<EMAIL RECIPIENT 2>"
-        ...
-      aws_access_key_id: <ACCESS KEY ID>   // optional (see below)
-      aws_secret_access_key: <SECRET ACCESS KEY>    // optional (see below)
-
- When using the SES provider, the suggested approach is to run subtocheck on an EC2 instance with an Instance Profile (IAM Role) that has the minimum permissions required to send an email. This will prevent hard-coding credentials and ensure the credentials used are temporary only.
- 
- If you decide to run outside of AWS then subtocheck will read credentials from the user's environment, e.g. Environment Variables, if 'aws_access_key_id' and 'aws_secret_access_key' are not specified.
-
- Run subtocheck, specifying email configuration
- 
- ``
- $ subtocheck --config <config>.yaml
- ``
-
-## <a name="contributing"></a>contributing
-
-If you find any bugs or want to add another provider pattern, please create an issue or submit a PR. Thanks.
-
-Fingerprints, DNS hosts and registry replies change over time. `live_test.go` checks them against the real services, and runs weekly, and on pull requests that change them, from the `live checks` workflow, which opens an issue when one fails. To run it locally:
-
-```bash
-go test -tags live -run TestLive -v .
-```
-
-When adding a fingerprint that can be confirmed this way, add its provider to `liveFingerprints` with an endpoint that serves the provider's page for unknown hosts.
+- [How it works](docs/how-it-works.md): each check, and what makes a finding a takeover or one to verify
+- [Providers](docs/providers.md): the providers, DNS hosts and fingerprints checked, and those confirmed live every week
+- [Output](docs/output.md): the console, the log file, JSON, and email reports with their configuration
+- [Contributing](docs/contributing.md): adding fingerprints, the live checks, and tests
