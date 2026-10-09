@@ -58,11 +58,17 @@ On a terminal, a progress bar shows while it scans, and each potential takeover 
 
 A summary follows, and the details of every issue are written to a log file.
 
+The list can also be piped in from another tool:
+
+```bash
+cat subdomains.txt | subtocheck --domains - --json
+```
+
 ## Options
 
 | Option | |
 |---|---|
-| `--domains <path>` | domain list file (default `domains.txt`) |
+| `--domains <path>` | domain list file (default `domains.txt`), or `-` to read the list from stdin |
 | `--log <path>` | log file path (default `subtocheck-<timestamp>.log`) |
 | `--json` | write the result to stdout as JSON instead of console output |
 | `--config <path>` | email a report after each scan |

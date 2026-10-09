@@ -28,7 +28,7 @@ import (
 )
 
 var (
-	domainListPath = kingpin.Flag("domains", "domain list file path").Default("domains.txt").String()
+	domainListPath = kingpin.Flag("domains", "domain list file path, or - to read the list from stdin").Default("domains.txt").String()
 	configPath     = kingpin.Flag("config", "config file").String()
 	quiet          = kingpin.Flag("quiet", "suppress command line output").Bool()
 	jsonOutput     = kingpin.Flag("json", "write the result to stdout as JSON instead of console output").Bool()
@@ -44,6 +44,10 @@ const exitFindings = 2
 var version, versionOutput, tag, sha, buildDate string
 
 func getDomainListFilePath(path string) (result string, err error) {
+	// "-" reads the list from stdin
+	if path == "-" {
+		return path, nil
+	}
 	if _, fErr := os.Stat(path); !os.IsNotExist(fErr) {
 		result = path
 	} else {
@@ -102,7 +106,7 @@ func main() {
 	}
 	kingpin.Version(versionOutput)
 	kingpin.CommandLine.HelpFlag.Short('h')
-	kingpin.Parse()
+	kingpin.MustParse(kingpin.CommandLine.Parse(stdinDomainsArg(os.Args[1:])))
 	kingpin.UsageTemplate(usageTemplate)
 
 	if *quiet && !*jsonOutput && *configPath == "" {
@@ -132,4 +136,19 @@ func main() {
 		// lets scripts and CI act on findings without parsing the output
 		os.Exit(exitFindings)
 	}
+}
+
+// stdinDomainsArg rewrites "--domains -" as "--domains=-", as kingpin takes an argument
+// starting with "-" for the next flag rather than the value of the one before it.
+func stdinDomainsArg(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--domains" && i+1 < len(args) && args[i+1] == "-" {
+			out = append(out, "--domains=-")
+			i++
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
 }
