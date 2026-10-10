@@ -51,6 +51,8 @@ Edge cases, reported to verify manually, as takeover depends on conditions such 
 
 ## Not checked
 
-- **Shopify** and **Webflow**: neither serves a distinctive page for a custom domain it does not know.
-- **Teamwork**, **Big Cartel** and **Better Stack**: listed by nuclei, but their pages for unclaimed names could not be confirmed.
+- **Shopify** and **Webflow**: neither serves a distinctive page for a custom domain it does not know. can-i-take-over-xyz rates both as not vulnerable edge cases.
+- **Teamwork**: nuclei matches `Oops - We didn't find your site.`, but an unclaimed `*.teamwork.com` name now serves the marketing site instead, so there is nothing distinctive to fingerprint.
+- **Big Cartel**: nuclei matches `Oops! We couldn't find that page.`, but an unclaimed `*.bigcartel.com` name now returns a generic "Page Not Found" page with no Big Cartel branding, which is too vague to trust.
+- **Better Stack**: an unclaimed name redirects to the marketing site, with no page that marks an unclaimed status page.
 - Services rated not vulnerable by can-i-take-over-xyz, such as CloudFront, Fastly, Google Cloud Storage, HubSpot, Kinsta and Zendesk.
