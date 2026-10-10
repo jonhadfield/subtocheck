@@ -253,8 +253,9 @@ var vPatterns = []vPattern{
 		bodyStringMatch: "all",
 	},
 	{
+		// verified live October 2026, through an unclaimed readthedocs.io subdomain
 		platform:        "Read the Docs",
-		bodyStrings:     []string{"unknown to Read the Docs"},
+		bodyStrings:     []string{"Project not found", "Read the Docs"},
 		bodyStringMatch: "all",
 	},
 	{
@@ -278,6 +279,7 @@ var vPatterns = []vPattern{
 		bodyStringMatch: "any",
 	},
 	{
+		// verified live October 2026, through an unclaimed smugmug.com subdomain
 		platform:        "SmugMug",
 		bodyStrings:     []string{`{"text":"Page Not Found"`},
 		bodyStringMatch: "all",
