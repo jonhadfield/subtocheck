@@ -41,8 +41,8 @@ A dangling delegation to any other host, such as Route 53 or Cloudflare, is repo
 | Help Scout ✓ | Helprace | JetBrains YouTrack |
 | LaunchRock ✓ | Leadpages ✓ | Ngrok ✓ |
 | Pantheon ✓ | Pingdom ✓ | Readme.io |
-| Read the Docs | S3 ✓ | Short.io ✓ |
-| SmartJobBoard ✓ | SmugMug | Strikingly |
+| Read the Docs ✓ | S3 ✓ | Short.io ✓ |
+| SmartJobBoard ✓ | SmugMug ✓ | Strikingly |
 | Surge.sh ✓ | SurveySparrow | Uberflip ✓ |
 | UptimeRobot | UserVoice ✓ | Wasabi ✓ |
 | WordPress.com ✓ | Wufoo ✓ |  |
